@@ -1,0 +1,25 @@
+{
+  "dependencies": {
+    "csv-parse": "^5.5.5",
+    "discord-rpc": "^4.0.1",
+    "metaflac-js": "^1.0.5",
+    "music-metadata": "^11.12.3",
+    "node-id3": "^0.2.9"
+  },
+  "name": "audio-playerinyo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "package": "electron-forge package",
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "electron": "^41.2.1"
+  }
+}

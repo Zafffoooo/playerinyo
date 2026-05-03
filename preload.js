@@ -1,0 +1,45 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('api', {
+  openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
+  openFile: () => ipcRenderer.invoke('dialog:openFile'),
+  scanFolder: (folderPath, existing) => ipcRenderer.invoke('scan-folder', folderPath, existing),
+  scanFolderImages: (folderPath) => ipcRenderer.invoke('scan-folder-images', folderPath),
+  parseCsv: (csvPath) => ipcRenderer.invoke('parse-csv', csvPath),
+  getAudioFile: (filePath) => ipcRenderer.invoke('get-audio-file', filePath),
+  loadLibrary: () => ipcRenderer.invoke('load-library'),
+  saveLibrary: (musicFiles) => ipcRenderer.invoke('save-library', musicFiles),
+  exportCsv: (playlists) => ipcRenderer.invoke('export-csv', playlists),
+  onScanProgress: (callback) => {
+    ipcRenderer.removeAllListeners('scan-progress');
+    ipcRenderer.on('scan-progress', (event, data) => callback(data));
+  },
+  openImage: () => ipcRenderer.invoke('dialog:openImage'),
+  openAudio: () => ipcRenderer.invoke('dialog:openAudio'),
+  openLrc: () => ipcRenderer.invoke('dialog:openLrc'),
+  loadPlaylists: () => ipcRenderer.invoke('load-playlists'),
+  savePlaylists: (data) => ipcRenderer.invoke('save-playlists', data),
+  loadMappings: () => ipcRenderer.invoke('load-mappings'),
+  saveMappings: (data) => ipcRenderer.invoke('save-mappings', data),
+  loadSettings: () => ipcRenderer.invoke('load-settings'),
+  saveSettings: (data) => ipcRenderer.invoke('save-settings', data),
+  getMetadata: (filePath) => ipcRenderer.invoke('get-metadata', filePath),
+  saveMetadata: (filePaths, tags, saveFolderJpg) => ipcRenderer.invoke('save-metadata', filePaths, tags, saveFolderJpg),
+  saveFolderCovers: (musicFiles) => ipcRenderer.invoke('save-folder-covers', musicFiles),
+  searchMusicBrainz: (query) => ipcRenderer.invoke('search-musicbrainz', query),
+  getMusicBrainzRelease: (releaseId) => ipcRenderer.invoke('get-musicbrainz-release', releaseId),
+  lastfmGetAuthUrl: (apiKey) => ipcRenderer.invoke('lastfm-get-auth-url', apiKey),
+  lastfmGetSession: (token, apiKey, sharedSecret) => ipcRenderer.invoke('lastfm-get-session', token, apiKey, sharedSecret),
+  lastfmUpdateNowPlaying: (sessionKey, artist, track, apiKey, sharedSecret) => ipcRenderer.invoke('lastfm-update-now-playing', sessionKey, artist, track, apiKey, sharedSecret),
+  lastfmScrobble: (sessionKey, artist, track, timestamp, apiKey, sharedSecret) => ipcRenderer.invoke('lastfm-scrobble', sessionKey, artist, track, timestamp, apiKey, sharedSecret),
+  getLastfmRecommendations: (sessionKey, apiKey, username) => ipcRenderer.invoke('lastfm-get-recommendations', sessionKey, apiKey, username),
+  updateThumbar: (isPlaying) => ipcRenderer.send('update-thumbar', isPlaying),
+  onThumbarAction: (callback) => ipcRenderer.on('thumbar-action', (event, action) => callback(action)),
+  registerShortcuts: (shortcuts) => ipcRenderer.invoke('register-shortcuts', shortcuts),
+  discordUpdate: (title, artist, album, startTime) => ipcRenderer.invoke('discord-update', title, artist, album, startTime),
+  discordClear: () => ipcRenderer.invoke('discord-clear'),
+  discordStatus: () => ipcRenderer.invoke('discord-status'),
+  backfillMetadata: (musicFiles) => ipcRenderer.invoke('backfill-metadata', musicFiles),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  showItemInFolder: (path) => ipcRenderer.invoke('show-item-in-folder', path)
+});
