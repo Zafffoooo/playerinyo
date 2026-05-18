@@ -5,11 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net data:; img-src 'self' data: blob: file: https:; media-src 'self' file: blob:; connect-src 'self' https://musicbrainz.org https://ws.audioscrobbler.com https://lrclib.net;">
   <title>Audio Playerinyo</title>
+  <link rel="icon" href="spotify-xxl_png.ico" type="image/x-icon">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.2/src/regular/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.2/src/fill/style.css">
 </head>
 <body>
+  <div class="window-titlebar">
+    <div class="window-titlebar-brand">
+      <img src="spotify-xxl_png.ico" alt="" />
+      <span>Playerinyo</span>
+    </div>
+    <div class="window-titlebar-center">Audio Playerinyo</div>
+    <div class="window-titlebar-controls">
+      <button class="window-btn" id="window-minimize" title="Minimize"><i class="ph ph-minus"></i></button>
+      <button class="window-btn" id="window-maximize" title="Maximize"><i class="ph ph-square"></i></button>
+      <button class="window-btn close" id="window-close" title="Close"><i class="ph ph-x"></i></button>
+    </div>
+  </div>
   <div class="app-container">
     <div class="top-section">
 
@@ -245,11 +258,12 @@
       <canvas id="visualizer" style="position:absolute; bottom:0; left:0; width:100%; height:100%; z-index:0; opacity:0.15; pointer-events:none;"></canvas>
       <div class="now-playing" id="now-playing-info" style="z-index:1;">
         <div class="cover-art placeholder"><i class="ph ph-music-notes"></i></div>
-        <div class="track-details">
-          <div class="track-name">No track selected</div>
-          <div class="track-artist">-</div>
-        </div>
-        <button class="icon-btn ghost" id="btn-like"><i class="ph ph-heart" id="like-icon"></i></button>
+          <div class="track-details">
+            <div class="track-name">No track selected</div>
+            <div class="track-artist">-</div>
+            <div class="replaygain-chip" id="replaygain-status-chip">RG idle</div>
+          </div>
+          <button class="icon-btn ghost" id="btn-like"><i class="ph ph-heart" id="like-icon"></i></button>
       </div>
 
       <div class="player-controls">
@@ -277,7 +291,6 @@
         <button class="icon-btn ghost" id="btn-lyrics-toggle" title="Lyrics"><i class="ph ph-microphone-stage"></i></button>
         <button class="icon-btn ghost" id="btn-queue-toggle" title="Queue"><i class="ph ph-queue"></i></button>
         <button class="icon-btn ghost" id="btn-now-playing-overlay" title="Now Playing View (N)"><i class="ph ph-arrows-out"></i></button>
-        <button class="icon-btn ghost" id="btn-mini-player" title="Mini Player"><i class="ph ph-picture-in-picture"></i></button>
         <button class="icon-btn ghost"><i class="ph ph-speaker-high"></i></button>
         <div class="volume-bar-container">
           <div class="progress-bar volume-bar" id="volume-bar" style="width:100%;">
@@ -289,34 +302,6 @@
   </div>
 
   <!-- ══════════════ NOW PLAYING OVERLAY ══════════════ -->
-  <div id="mini-player" class="mini-player">
-    <div class="mini-window-bar">
-      <button class="mini-window-btn" id="mini-minimize" title="Hide">−</button>
-      <button class="mini-window-btn" id="mini-close" title="Close">×</button>
-    </div>
-    <div class="mini-art-frame">
-      <img id="mini-cover" class="mini-cover" src="" alt="" />
-      <div id="mini-cover-placeholder" class="mini-cover-placeholder"><i class="ph ph-music-notes"></i></div>
-    </div>
-    <div class="mini-info">
-      <div id="mini-title" class="mini-title">No track</div>
-      <div id="mini-artist" class="mini-artist">-</div>
-    </div>
-    <div class="mini-progress-row">
-      <span id="mini-time-current">0:00</span>
-      <div class="mini-progress-container" id="mini-progress-container"><div id="mini-progress-bar"></div></div>
-      <span id="mini-time-total">0:00</span>
-    </div>
-    <div class="mini-controls">
-      <button class="icon-btn ghost" id="mini-volume"><i class="ph ph-speaker-simple-high"></i></button>
-      <button class="icon-btn ghost" id="mini-prev"><i class="ph ph-skip-back"></i></button>
-      <button class="icon-btn" id="mini-play"><i class="ph ph-play" id="mini-play-icon"></i></button>
-      <button class="icon-btn ghost" id="mini-next"><i class="ph ph-skip-forward"></i></button>
-      <button class="icon-btn ghost" id="mini-search"><i class="ph ph-magnifying-glass"></i></button>
-      <button class="icon-btn ghost" id="mini-queue"><i class="ph ph-list"></i></button>
-    </div>
-  </div>
-
   <div id="now-playing-overlay" class="np-overlay">
     <!-- Blurred bg pulled from album art -->
     <div class="np-bg-blur" id="np-bg-blur"></div>
@@ -381,6 +366,31 @@
   </div>
 
   <!-- ─── MODALS ─── -->
+
+  <div id="command-palette-modal" class="modal-overlay command-palette-overlay">
+    <div class="command-palette modal-content">
+      <div class="command-palette-search">
+        <i class="ph ph-magnifying-glass"></i>
+        <input type="text" id="command-palette-input" placeholder="Search songs, albums, playlists, commands..." autocomplete="off" />
+        <span>Ctrl K</span>
+      </div>
+      <div class="command-palette-list" id="command-palette-list"></div>
+      <div class="command-palette-help">Enter to run • Up/Down to move • Esc to close</div>
+    </div>
+  </div>
+
+  <div id="import-review-modal" class="modal-overlay">
+    <div class="modal-content import-review-modal" style="width:560px;">
+      <h2 style="margin-top:0;margin-bottom:8px;">Import Review</h2>
+      <div id="import-review-subtitle" style="color:var(--text-subdued);font-size:13px;margin-bottom:16px;">Library scan complete.</div>
+      <div class="import-review-grid" id="import-review-grid"></div>
+      <div class="import-review-actions">
+        <button class="btn btn-outline" id="import-review-tag-health">Open Tag Health</button>
+        <button class="btn btn-outline" id="import-review-analyze-rg">Analyze Missing ReplayGain</button>
+        <button class="btn btn-primary" id="import-review-done">Done</button>
+      </div>
+    </div>
+  </div>
 
   <!-- EQ Modal -->
   <div id="eq-modal" class="modal-overlay">
@@ -455,10 +465,45 @@
       </div>
 
       <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
+        <span style="margin-bottom:8px;">Metadata Sources</span>
+        <label style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Discogs Personal Access Token</label>
+        <input type="password" id="setting-discogs-token" class="meta-inp" placeholder="Optional: enables Discogs Auto-Tag fallback" style="width:100%;font-size:12px;">
+        <div style="font-size:11px;color:var(--text-subdued);margin-top:6px;line-height:1.4;">MusicBrainz, iTunes and Deezer work without a token. Discogs results appear when a token is saved.</div>
+      </div>
+
+      <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
         <span style="margin-bottom:8px;">Theme Color</span>
         <div id="theme-color-picker" style="display:flex;gap:10px;flex-wrap:wrap;width:100%;">
           <!-- colors injected by JS -->
         </div>
+      </div>
+
+      <div class="setting-item theme-settings-block" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
+        <div style="display:flex;align-items:center;justify-content:space-between;width:100%;gap:12px;margin-bottom:10px;">
+          <div>
+            <span>Advanced Theme</span>
+            <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Customize every core UI color and glass effect</div>
+          </div>
+          <button class="btn btn-outline" id="theme-reset-btn" style="width:auto;padding:7px 11px;border-radius:10px;font-size:12px;">Reset</button>
+        </div>
+        <div class="theme-color-grid" id="theme-color-grid">
+          <label class="theme-color-control">Accent<input type="color" id="theme-accent" value="#E50914"></label>
+          <label class="theme-color-control">Background<input type="color" id="theme-bg" value="#030305"></label>
+          <label class="theme-color-control">Panel<input type="color" id="theme-panel" value="#101116"></label>
+          <label class="theme-color-control">Glass<input type="color" id="theme-glass" value="#161821"></label>
+          <label class="theme-color-control">Border<input type="color" id="theme-border" value="#2A2D38"></label>
+          <label class="theme-color-control">Text<input type="color" id="theme-text" value="#F8F8FA"></label>
+          <label class="theme-color-control">Muted<input type="color" id="theme-muted" value="#A5A7B4"></label>
+          <label class="theme-color-control">Danger<input type="color" id="theme-danger" value="#FF3B5F"></label>
+        </div>
+      </div>
+
+      <div class="setting-item" style="margin-bottom:12px;">
+        <div>
+          <span>Glass Effects</span>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Disable for the lightest performance mode</div>
+        </div>
+        <input type="checkbox" id="setting-glass-effects" checked />
       </div>
 
       <div class="setting-item" style="margin-bottom:12px;">
@@ -499,8 +544,16 @@
         <div id="shortcuts-list" style="display:flex;flex-direction:column;gap:6px;"></div>
       </div>
 
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+        <button class="btn btn-outline" id="btn-export-backup" style="justify-content:center;">
+          <i class="ph ph-download-simple"></i> Export Backup
+        </button>
+        <button class="btn btn-outline" id="btn-import-backup" style="justify-content:center;">
+          <i class="ph ph-upload-simple"></i> Import Backup
+        </button>
+      </div>
       <button class="btn btn-outline" id="btn-export-data" style="width:100%;margin-bottom:12px;justify-content:center;">
-        <i class="ph ph-export"></i> Export All Data (CSV)
+        <i class="ph ph-export"></i> Export Playlists CSV
       </button>
       <button class="btn btn-primary" id="btn-close-settings" style="width:100%;justify-content:center;">Done</button>
     </div>
@@ -581,29 +634,31 @@
 
   <!-- Album Context Menu -->
   <div id="album-context-menu" class="context-menu">
-    <div class="menu-item" id="actx-play-next">Play Next</div>
-    <div class="menu-item" id="actx-add-queue">Add to Queue</div>
-    <div class="menu-item" id="actx-add-playlist">Add to Playlist…</div>
+    <div class="menu-item" id="actx-add-playlist"><i class="ph ph-list-plus"></i> Add to Playlist…</div>
+    <div class="menu-item" id="actx-play-next"><i class="ph ph-skip-forward"></i> Play Next</div>
+    <div class="menu-item" id="actx-add-queue"><i class="ph ph-queue"></i> Add to Queue</div>
     <div class="menu-separator"></div>
-    <div class="menu-item" id="actx-analyze-loudness">Analyze Loudness</div>
-    <div class="menu-item" id="actx-split-disc">Split by Disc</div>
+    <div class="menu-item" id="actx-edit-metadata"><i class="ph ph-pencil-simple"></i> Edit Album Metadata</div>
+    <div class="menu-item" id="actx-analyze-loudness"><i class="ph ph-waveform"></i> Analyze Loudness</div>
+    <div class="menu-item" id="actx-split-disc"><i class="ph ph-vinyl-record"></i> Split by Disc</div>
     <div class="menu-separator"></div>
-    <div class="menu-item" id="actx-open-folder">Open File Location</div>
+    <div class="menu-item" id="actx-open-folder"><i class="ph ph-folder-open"></i> Open File Location</div>
+    <div class="menu-item" id="actx-remove-library" style="color:#e91e63;"><i class="ph ph-trash"></i> Remove Album from Library</div>
   </div>
 
   <!-- Track Context Menu -->
   <div id="track-context-menu" class="context-menu">
-    <div class="menu-item" id="ctx-play-next">Play Next</div>
-    <div class="menu-item" id="ctx-add-queue">Add to Queue</div>
-    <div class="menu-item" id="ctx-go-to-album">Go to Album</div>
+    <div class="menu-item" id="ctx-add-playlist"><i class="ph ph-list-plus"></i> Add to Playlist…</div>
+    <div class="menu-item" id="ctx-play-next"><i class="ph ph-skip-forward"></i> Play Next</div>
+    <div class="menu-item" id="ctx-add-queue"><i class="ph ph-queue"></i> Add to Queue</div>
+    <div class="menu-item" id="ctx-go-to-album"><i class="ph ph-vinyl-record"></i> Go to Album</div>
     <div class="menu-separator"></div>
-    <div class="menu-item" id="ctx-add-playlist">Add to Playlist…</div>
-    <div class="menu-item" id="ctx-edit-metadata">Edit Metadata</div>
-    <div class="menu-item" id="ctx-analyze-loudness">Analyze Loudness</div>
-    <div class="menu-item" id="ctx-open-folder">Open File Location</div>
-    <div class="menu-item" id="ctx-remove-playlist" style="color:#e91e63;">Remove from Playlist</div>
-    <div class="menu-item" id="ctx-manual-match" style="color:var(--accent);">Manual Match…</div>
-    <div class="menu-item" id="ctx-remove-match" style="color:#FF9800;display:none;">Remove Match</div>
+    <div class="menu-item" id="ctx-edit-metadata"><i class="ph ph-pencil-simple"></i> Edit Metadata</div>
+    <div class="menu-item" id="ctx-analyze-loudness"><i class="ph ph-waveform"></i> Analyze Loudness</div>
+    <div class="menu-item" id="ctx-open-folder"><i class="ph ph-folder-open"></i> Open File Location</div>
+    <div class="menu-item" id="ctx-manual-match" style="color:var(--accent);"><i class="ph ph-link"></i> Manual Match…</div>
+    <div class="menu-item" id="ctx-remove-match" style="color:#FF9800;display:none;"><i class="ph ph-link-break"></i> Remove Match</div>
+    <div class="menu-item" id="ctx-remove-playlist" style="color:#e91e63;"><i class="ph ph-minus-circle"></i> Remove from Playlist</div>
   </div>
 
   <!-- Playlist Context Menu -->
@@ -644,9 +699,10 @@
   </div>
 
   <div id="playlist-selector-modal" class="modal-overlay">
-    <div class="modal-content" style="width:300px;">
-      <h3 style="margin-top:0;margin-bottom:16px;">Add to Playlist</h3>
-      <div id="playlist-selector-list" style="max-height:200px;overflow-y:auto;margin-bottom:16px;"></div>
+    <div class="modal-content" style="width:440px;max-width:calc(100vw - 32px);">
+      <h3 style="margin-top:0;margin-bottom:6px;">Add to Playlist</h3>
+      <div id="playlist-selector-subtitle" style="font-size:12px;color:var(--text-subdued);margin-bottom:14px;"></div>
+      <div id="playlist-selector-list" style="max-height:360px;overflow-y:auto;margin-bottom:16px;"></div>
       <button class="btn btn-outline" id="btn-close-playlist-selector" style="width:100%;justify-content:center;">Cancel</button>
     </div>
   </div>
@@ -694,7 +750,7 @@
 
   <!-- Metadata Editor Modal -->
   <div id="metadata-modal" class="modal-overlay">
-    <div class="modal-content" style="width:900px;max-width:95vw;">
+    <div class="modal-content metadata-modal-content" style="width:calc(100vw - 72px);max-width:1320px;max-height:92vh;overflow-y:auto;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
         <h2 style="margin:0;" id="meta-modal-title">Edit Metadata</h2>
         <div style="display:flex;gap:8px;">
@@ -729,6 +785,18 @@
           <div style="grid-column:1 / -1;"><label class="meta-lbl">Album</label><input type="text" id="meta-album" class="meta-inp"></div>
           <div><label class="meta-lbl">Year</label><input type="text" id="meta-year" class="meta-inp"></div>
           <div><label class="meta-lbl">Genre</label><input type="text" id="meta-genre" class="meta-inp"></div>
+          <div><label class="meta-lbl">Track No</label><input type="number" min="0" id="meta-track-no" class="meta-inp"></div>
+          <div><label class="meta-lbl">Track Total</label><input type="number" min="0" id="meta-track-total" class="meta-inp"></div>
+          <div><label class="meta-lbl">Disc No</label><input type="number" min="0" id="meta-disc-no" class="meta-inp"></div>
+          <div><label class="meta-lbl">Disc Total</label><input type="number" min="0" id="meta-disc-total" class="meta-inp"></div>
+          <div id="meta-track-order-wrap" style="grid-column:1 / -1;display:none;margin-top:4px;min-height:0;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+              <label class="meta-lbl" style="margin:0;">Track Order</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-subdued);"><input type="checkbox" id="meta-save-track-order" style="accent-color:var(--accent);"> Save this order as track numbers</label>
+            </div>
+            <div id="meta-track-order-list" style="max-height:190px;overflow-y:auto;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);padding:6px;"></div>
+            <div style="font-size:11px;color:var(--text-subdued);margin-top:6px;">Drag tracks here before Auto-Tag if your local order differs from the selected release.</div>
+          </div>
         </div>
       </div>
 
@@ -738,11 +806,28 @@
         <!-- Search bar -->
         <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;">
           <input type="text" id="meta-search-query" class="meta-inp" style="flex:1;" placeholder="e.g. Artist Album name">
-          <button class="btn btn-outline" id="meta-search-btn" style="width:auto;padding:8px 16px;white-space:nowrap;"><i class="ph ph-magnifying-glass"></i> Search MusicBrainz</button>
+          <button class="btn btn-outline" id="meta-search-btn" style="width:auto;padding:8px 16px;white-space:nowrap;"><i class="ph ph-magnifying-glass"></i> Search Metadata</button>
+        </div>
+
+        <div id="at-track-order-wrap" style="display:none;margin-bottom:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025);padding:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:rgba(255,255,255,.45);">Local Track Order</div>
+              <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Drag local tracks here to line them up with the selected metadata source.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+              <button class="btn btn-outline" id="at-order-filename" style="width:auto;padding:5px 9px;font-size:11px;">Sort by filename</button>
+              <button class="btn btn-outline" id="at-order-trackno" style="width:auto;padding:5px 9px;font-size:11px;">Sort by current #</button>
+              <button class="btn btn-outline" id="at-order-match-title" style="width:auto;padding:5px 9px;font-size:11px;color:var(--accent);">Match by title</button>
+              <button class="btn btn-outline" id="at-order-reset" style="width:auto;padding:5px 9px;font-size:11px;">Reset</button>
+              <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-subdued);"><input type="checkbox" id="at-save-track-order" style="accent-color:var(--accent);"> Save order as track #</label>
+            </div>
+          </div>
+          <div id="at-track-order-list" style="max-height:140px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;"></div>
         </div>
 
         <!-- 3-column layout: Results | Fields | Track list -->
-        <div style="display:grid;grid-template-columns:220px 240px 1fr;gap:12px;min-height:360px;max-height:min(420px, calc(100vh - 280px));">
+        <div style="display:grid;grid-template-columns:300px 310px minmax(560px,1fr);gap:14px;min-height:500px;max-height:min(640px, calc(100vh - 230px));">
 
           <!-- Col 1: Search Results -->
           <div style="display:flex;flex-direction:column;min-height:0;">
@@ -766,6 +851,7 @@
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-album" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Album</span> <span id="at-val-album" style="margin-left:auto;color:var(--accent);font-size:11px;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span></label>
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-year" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Year</span> <span id="at-val-year" style="margin-left:auto;color:var(--accent);font-size:11px;"></span></label>
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-genre" style="accent-color:var(--accent);flex-shrink:0;"> <span>Genre</span> <span id="at-val-genre" style="margin-left:auto;color:var(--accent);font-size:11px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-cover" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Cover</span></label>
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-track-titles" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Track Titles</span></label>
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-track-numbers" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Track Nos.</span></label>
               </div>

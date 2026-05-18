@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('api', {
   getAudioFile: (filePath) => ipcRenderer.invoke('get-audio-file', filePath),
   loadLibrary: () => ipcRenderer.invoke('load-library'),
   saveLibrary: (musicFiles) => ipcRenderer.invoke('save-library', musicFiles),
+  checkLibraryFiles: (musicFiles) => ipcRenderer.invoke('check-library-files', musicFiles),
+  exportBackup: (extras) => ipcRenderer.invoke('export-backup', extras),
+  importBackup: () => ipcRenderer.invoke('import-backup'),
+  restoreBackup: (filePath) => ipcRenderer.invoke('restore-backup', filePath),
   exportCsv: (playlists) => ipcRenderer.invoke('export-csv', playlists),
   onScanProgress: (callback) => {
     ipcRenderer.removeAllListeners('scan-progress');
@@ -28,6 +32,8 @@ contextBridge.exposeInMainWorld('api', {
   saveFolderCovers: (musicFiles) => ipcRenderer.invoke('save-folder-covers', musicFiles),
   searchMusicBrainz: (query) => ipcRenderer.invoke('search-musicbrainz', query),
   getMusicBrainzRelease: (releaseId) => ipcRenderer.invoke('get-musicbrainz-release', releaseId),
+  searchMetadataSources: (query, discogsToken) => ipcRenderer.invoke('search-metadata-sources', query, discogsToken),
+  getMetadataRelease: (source, id, discogsToken) => ipcRenderer.invoke('get-metadata-release', source, id, discogsToken),
   lastfmGetAuthUrl: (apiKey) => ipcRenderer.invoke('lastfm-get-auth-url', apiKey),
   lastfmGetSession: (token, apiKey, sharedSecret) => ipcRenderer.invoke('lastfm-get-session', token, apiKey, sharedSecret),
   lastfmUpdateNowPlaying: (sessionKey, artist, track, apiKey, sharedSecret) => ipcRenderer.invoke('lastfm-update-now-playing', sessionKey, artist, track, apiKey, sharedSecret),
@@ -41,5 +47,6 @@ contextBridge.exposeInMainWorld('api', {
   discordStatus: () => ipcRenderer.invoke('discord-status'),
   backfillMetadata: (musicFiles) => ipcRenderer.invoke('backfill-metadata', musicFiles),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
-  showItemInFolder: (path) => ipcRenderer.invoke('show-item-in-folder', path)
+  showItemInFolder: (path) => ipcRenderer.invoke('show-item-in-folder', path),
+  windowControl: (action) => ipcRenderer.invoke('window-control', action)
 });

@@ -66,7 +66,11 @@ let mm;
 let tray = null;
 let isQuitting = false;
 let appSettings = { minimizeToTray: false };
-const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey'];
+const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken'];
+const APP_ICON = path.join(__dirname, 'spotify-xxl_png.ico');
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) app.quit();
 
 function serializeSettingsForDisk(settings) {
   const next = { ...settings };
@@ -101,6 +105,29 @@ function deserializeSettingsFromDisk(settings) {
   return next;
 }
 
+function readJsonFile(filePath, fallback) {
+  try {
+    if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (e) { console.error('Failed to read JSON:', filePath, e); }
+  return fallback;
+}
+
+function sanitizeSettingsForBackup(settings) {
+  const next = { ...(settings || {}) };
+  for (const key of SENSITIVE_SETTING_KEYS) delete next[key];
+  return next;
+}
+
+function summarizeBackupData(data) {
+  return {
+    library: Array.isArray(data && data.library) ? data.library.length : 0,
+    playlists: Array.isArray(data && data.playlists) ? data.playlists.length : 0,
+    likedSongs: Array.isArray(data && data.likedSongs) ? data.likedSongs.length : 0,
+    hasSettings: !!(data && data.settings && typeof data.settings === 'object'),
+    hasMappings: !!(data && data.mappings && typeof data.mappings === 'object'),
+  };
+}
+
 
 async function loadMM() {
   mm = await import('music-metadata');
@@ -110,12 +137,15 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 980,
+    minHeight: 640,
+    frame: false,
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
     },
-    titleBarStyle: 'hiddenInset',
     autoHideMenuBar: true,
     backgroundColor: '#000000'
   });
@@ -130,12 +160,25 @@ function createWindow() {
   });
 }
 
+function showMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+if (gotSingleInstanceLock) {
+app.on('second-instance', () => {
+  showMainWindow();
+});
+
 app.whenReady().then(async () => {
+  if (process.platform === 'win32') app.setAppUserModelId('com.playerinyo.audio');
   await loadMM();
   createWindow();
 
   try {
-    const icon = nativeImage.createEmpty();
+    const icon = nativeImage.createFromPath(APP_ICON);
     tray = new Tray(icon);
     const contextMenu = Menu.buildFromTemplate([
       { label: 'Show Playerinyo', click: () => mainWindow.show() },
@@ -167,6 +210,7 @@ app.whenReady().then(async () => {
     if (mainWindow) mainWindow.webContents.send('thumbar-action', 'prev');
   });
 });
+}
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
@@ -191,6 +235,16 @@ ipcMain.handle('open-external', async (event, url) => {
 ipcMain.handle('show-item-in-folder', async (event, fullPath) => {
   if (typeof fullPath !== 'string' || !path.isAbsolute(fullPath) || !fs.existsSync(fullPath)) return false;
   shell.showItemInFolder(fullPath);
+  return true;
+});
+
+ipcMain.handle('window-control', async (event, action) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  if (action === 'minimize') win.minimize();
+  else if (action === 'toggle-maximize') win.isMaximized() ? win.unmaximize() : win.maximize();
+  else if (action === 'close') win.close();
+  else return false;
   return true;
 });
 
@@ -430,6 +484,86 @@ ipcMain.handle('save-library', (event, musicFiles) => {
   catch (e) { return false; }
 });
 
+ipcMain.handle('export-backup', async (event, extras) => {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    filters: [{ name: 'Playerinyo Backup', extensions: ['json'] }],
+    defaultPath: `playerinyo_backup_${stamp}.json`,
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    const data = {
+      library: readJsonFile(LIBRARY_FILE, []),
+      playlists: readJsonFile(PLAYLISTS_FILE, []),
+      mappings: readJsonFile(MAPPINGS_FILE, {}),
+      settings: sanitizeSettingsForBackup(appSettings),
+      likedSongs: extras && Array.isArray(extras.likedSongs) ? extras.likedSongs : [],
+      exportedFrom: 'Audio Playerinyo',
+    };
+    const payload = {
+      app: 'Audio Playerinyo',
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      data,
+    };
+    await fs.promises.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+    return { ok: true, filePath, summary: summarizeBackupData(data) };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle('import-backup', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'Playerinyo Backup', extensions: ['json'] }],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
+  try {
+    const parsed = JSON.parse(await fs.promises.readFile(filePaths[0], 'utf8'));
+    const data = parsed && parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
+    return { ok: true, filePath: filePaths[0], summary: summarizeBackupData(data) };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle('restore-backup', async (event, backupPath) => {
+  if (typeof backupPath !== 'string' || !path.isAbsolute(backupPath) || !fs.existsSync(backupPath)) return { ok: false, error: 'Invalid backup path' };
+  try {
+    const parsed = JSON.parse(await fs.promises.readFile(backupPath, 'utf8'));
+    const data = parsed && parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
+    if (Array.isArray(data.library)) await fs.promises.writeFile(LIBRARY_FILE, JSON.stringify(data.library), 'utf8');
+    if (Array.isArray(data.playlists)) await fs.promises.writeFile(PLAYLISTS_FILE, JSON.stringify(data.playlists), 'utf8');
+    if (data.mappings && typeof data.mappings === 'object') await fs.promises.writeFile(MAPPINGS_FILE, JSON.stringify(data.mappings), 'utf8');
+    if (data.settings && typeof data.settings === 'object') {
+      appSettings = { ...appSettings, ...data.settings };
+      await fs.promises.writeFile(SETTINGS_FILE, JSON.stringify(serializeSettingsForDisk(appSettings)), 'utf8');
+    }
+    return { ok: true, summary: summarizeBackupData(data), likedSongs: Array.isArray(data.likedSongs) ? data.likedSongs : [] };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle('check-library-files', async (event, musicFiles) => {
+  if (!Array.isArray(musicFiles)) return { ok: false, missing: [] };
+  const missing = [];
+  for (let i = 0; i < musicFiles.length; i++) {
+    const file = musicFiles[i];
+    const filePath = file && typeof file.filePath === 'string' ? file.filePath : '';
+    if (!path.isAbsolute(filePath) || !AUDIO_EXTENSIONS.includes(path.extname(filePath).toLowerCase())) continue;
+    try {
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile()) missing.push(filePath);
+    } catch (e) {
+      missing.push(filePath);
+    }
+    if (i % 100 === 0) await new Promise((resolve) => setImmediate(resolve));
+  }
+  return { ok: true, missing };
+});
+
 // Back-fill year/genre for existing library files that are missing those fields
 ipcMain.handle('backfill-metadata', async (event, musicFiles) => {
   let updated = 0;
@@ -644,7 +778,9 @@ function updateFlacMetadata(filePath, tags) {
   if (tags.year) setFlacTag(flac, 'DATE', tags.year);
   if (tags.genre) setFlacTag(flac, 'GENRE', tags.genre);
   if (tags.trackNumber) setFlacTag(flac, 'TRACKNUMBER', tags.trackNumber);
+  if (tags.trackTotal) setFlacTag(flac, 'TOTALTRACKS', tags.trackTotal);
   if (tags.discNumber) setFlacTag(flac, 'DISCNUMBER', tags.discNumber);
+  if (tags.discTotal) setFlacTag(flac, 'TOTALDISCS', tags.discTotal);
   if (tags.partOfSet) {
     setFlacTag(flac, 'DISCNUMBER', tags.partOfSet);
     const parts = String(tags.partOfSet).split('/');
@@ -806,6 +942,118 @@ ipcMain.handle('get-musicbrainz-release', async (event, releaseId) => {
   } catch (e) { return null; }
 });
 
+function safeYear(value) {
+  const match = String(value || '').match(/\d{4}/);
+  return match ? match[0] : '';
+}
+
+function normalizeSourceResult(source, id, title, artist, year, extra = {}) {
+  return { source, id: String(id || ''), title: title || 'Unknown Album', artist: artist || 'Unknown Artist', date: year || '', thumb: extra.thumb || '', label: extra.label || '' };
+}
+
+function toArtistCredit(name) {
+  return [{ name: name || 'Unknown Artist' }];
+}
+
+function normalizeMetadataRelease(source, data) {
+  if (!data) return null;
+  if (source === 'musicbrainz') return { ...data, source: 'MusicBrainz' };
+  if (source === 'itunes') {
+    const album = data.album || {};
+    const songs = data.songs || [];
+    return {
+      source: 'iTunes',
+      id: `itunes:${album.collectionId || ''}`,
+      title: album.collectionName || '',
+      date: safeYear(album.releaseDate),
+      genres: album.primaryGenreName ? [{ name: album.primaryGenreName }] : [],
+      'artist-credit': toArtistCredit(album.artistName),
+      coverUrl: album.artworkUrl100 ? album.artworkUrl100.replace(/100x100bb\.jpg$/i, '600x600bb.jpg') : '',
+      media: [{ position: 1, tracks: songs.map((song, index) => ({ title: song.trackName || '', position: song.trackNumber || (index + 1), length: song.trackTimeMillis || 0 })) }]
+    };
+  }
+  if (source === 'deezer') {
+    return {
+      source: 'Deezer',
+      id: `deezer:${data.id || ''}`,
+      title: data.title || '',
+      date: safeYear(data.release_date),
+      genres: data.genres && data.genres.data && data.genres.data[0] ? [{ name: data.genres.data[0].name }] : [],
+      'artist-credit': toArtistCredit(data.artist && data.artist.name),
+      coverUrl: data.cover_xl || data.cover_big || data.cover_medium || '',
+      media: [{ position: 1, tracks: data.tracks && data.tracks.data ? data.tracks.data.map((song, index) => ({ title: song.title || '', position: song.track_position || (index + 1), length: song.duration ? song.duration * 1000 : 0 })) : [] }]
+    };
+  }
+  if (source === 'discogs') {
+    const titleParts = String(data.title || '').split(' - ');
+    const artist = data.artists_sort || (data.artists && data.artists.map(a => a.name).join(', ')) || titleParts[0] || '';
+    const albumTitle = titleParts.length > 1 ? titleParts.slice(1).join(' - ') : (data.title || '');
+    return {
+      source: 'Discogs',
+      id: `discogs:${data.id || ''}`,
+      title: albumTitle,
+      date: safeYear(data.year),
+      genres: data.genres && data.genres[0] ? [{ name: data.genres[0] }] : [],
+      'artist-credit': toArtistCredit(artist),
+      coverUrl: data.images && data.images[0] ? data.images[0].uri : '',
+      media: [{ position: 1, tracks: (data.tracklist || []).filter(t => t.type_ !== 'heading').map((song, index) => ({ title: song.title || '', position: index + 1, length: 0 })) }]
+    };
+  }
+  return null;
+}
+
+ipcMain.handle('search-metadata-sources', async (event, query, discogsToken) => {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const headers = { 'User-Agent': 'AudioPlayerinyo/1.0.0 ( zafer@example.com )' };
+  const jobs = [];
+  jobs.push(fetch(`https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(q)}&fmt=json&limit=10`, { headers }).then(r => r.json()).then(data => (data.releases || []).map(r => normalizeSourceResult('musicbrainz', r.id, r.title, r['artist-credit'] ? r['artist-credit'].map(a => a.name || (a.artist && a.artist.name) || '').join(', ') : '', safeYear(r.date), { label: 'MusicBrainz' }))).catch(() => []));
+  jobs.push(fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=8`).then(r => r.json()).then(data => (data.results || []).map(r => normalizeSourceResult('itunes', r.collectionId, r.collectionName, r.artistName, safeYear(r.releaseDate), { thumb: r.artworkUrl100 || '', label: 'iTunes' }))).catch(() => []));
+  jobs.push(fetch(`https://api.deezer.com/search/album?q=${encodeURIComponent(q)}&limit=8`).then(r => r.json()).then(data => (data.data || []).map(r => normalizeSourceResult('deezer', r.id, r.title, r.artist && r.artist.name, '', { thumb: r.cover_medium || '', label: 'Deezer' }))).catch(() => []));
+  const token = String(discogsToken || '').trim();
+  if (token) {
+    jobs.push(fetch(`https://api.discogs.com/database/search?type=release&per_page=8&q=${encodeURIComponent(q)}&token=${encodeURIComponent(token)}`, { headers }).then(r => r.json()).then(data => (data.results || []).map(r => {
+      const parts = String(r.title || '').split(' - ');
+      return normalizeSourceResult('discogs', r.id, parts.length > 1 ? parts.slice(1).join(' - ') : r.title, parts.length > 1 ? parts[0] : '', safeYear(r.year), { thumb: r.thumb || '', label: 'Discogs' });
+    })).catch(() => []));
+  }
+  const groups = await Promise.all(jobs);
+  return groups.flat().filter(r => r.id);
+});
+
+ipcMain.handle('get-metadata-release', async (event, source, id, discogsToken) => {
+  try {
+    source = String(source || '');
+    id = String(id || '');
+    const headers = { 'User-Agent': 'AudioPlayerinyo/1.0.0 ( zafer@example.com )' };
+    if (source === 'musicbrainz') {
+      const res = await fetch(`https://musicbrainz.org/ws/2/release/${encodeURIComponent(id)}?inc=recordings+artists&fmt=json`, { headers });
+      return normalizeMetadataRelease(source, await res.json());
+    }
+    if (source === 'itunes') {
+      const res = await fetch(`https://itunes.apple.com/lookup?id=${encodeURIComponent(id)}&entity=song&limit=200`);
+      const data = await res.json();
+      const album = (data.results || []).find(x => x.wrapperType === 'collection') || {};
+      const songs = (data.results || []).filter(x => x.wrapperType === 'track').sort((a, b) => (a.discNumber || 1) - (b.discNumber || 1) || (a.trackNumber || 0) - (b.trackNumber || 0));
+      return normalizeMetadataRelease(source, { album, songs });
+    }
+    if (source === 'deezer') {
+      const res = await fetch(`https://api.deezer.com/album/${encodeURIComponent(id)}`);
+      return normalizeMetadataRelease(source, await res.json());
+    }
+    if (source === 'discogs') {
+      const token = String(discogsToken || '').trim();
+      if (!token) return null;
+      const res = await fetch(`https://api.discogs.com/releases/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`, { headers });
+      return normalizeMetadataRelease(source, await res.json());
+    }
+    return null;
+  } catch (e) {
+    console.error('Metadata release fetch failed:', e);
+    return null;
+  }
+});
+
 ipcMain.handle('lastfm-get-auth-url', async (event, apiKey) => {
   let key = (apiKey || '').trim();
   if (!key) return null;
@@ -856,46 +1104,19 @@ ipcMain.on('update-thumbar', (event, isPlaying) => {
     const { nativeImage } = require('electron');
 
     function makeIcon(type) {
-      const size = 16;
-      // Raw RGBA buffer (16x16 = 256 pixels * 4 bytes)
-      const buf = Buffer.alloc(size * size * 4, 0);
-      for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-          const idx = (size * y + x) * 4;
-          let white = false;
-          if (type === 'prev') {
-            // Left bar (x=2..3, full height y=3..12) + reverse triangle
-            if (x >= 2 && x <= 3 && y >= 3 && y <= 12) white = true;
-            // Triangle pointing left: peak at x=4,y=8; wide at x=11
-            if (x >= 4 && x <= 11) {
-              const half = x - 4;
-              if (y >= 8 - half && y <= 8 + half) white = true;
-            }
-          } else if (type === 'next') {
-            // Right bar (x=11..12, full height y=3..12) + forward triangle
-            if (x >= 11 && x <= 12 && y >= 3 && y <= 12) white = true;
-            // Triangle pointing right: peak at x=11,y=8; wide at x=4
-            if (x >= 4 && x <= 11) {
-              const half = 11 - x;
-              if (y >= 8 - half && y <= 8 + half) white = true;
-            }
-          } else if (type === 'play') {
-            // Triangle pointing right, from x=3 to x=13
-            if (x >= 3 && x <= 12) {
-              const half = x - 3;
-              if (y >= 8 - half && y <= 8 + half) white = true;
-            }
-          } else if (type === 'pause') {
-            // Two vertical bars
-            if ((x >= 3 && x <= 5 || x >= 8 && x <= 10) && y >= 3 && y <= 12) white = true;
-          }
-          buf[idx]   = 255; // R
-          buf[idx+1] = 255; // G
-          buf[idx+2] = 255; // B
-          buf[idx+3] = white ? 255 : 0; // A
-        }
+      const iconPath = path.join(__dirname, 'assets', 'taskbar', `taskbar-${type}.png`);
+      if (fs.existsSync(iconPath)) {
+        const icon = nativeImage.createFromPath(iconPath);
+        if (!icon.isEmpty()) return icon.resize({ width: 24, height: 24, quality: 'best' });
       }
-      return nativeImage.createFromBuffer(buf, { width: size, height: size });
+      const paths = {
+        prev: '<path d="M11 7L5 12L11 17V7Z" fill="white"/><path d="M19 7L13 12L19 17V7Z" fill="white"/><path d="M4 7V17" stroke="white" stroke-width="2.2" stroke-linecap="round"/>',
+        next: '<path d="M13 7L19 12L13 17V7Z" fill="white"/><path d="M5 7L11 12L5 17V7Z" fill="white"/><path d="M20 7V17" stroke="white" stroke-width="2.2" stroke-linecap="round"/>',
+        play: '<path d="M8.5 6.8C8.5 6.1 9.25 5.68 9.85 6.04L18.15 11.24C18.72 11.6 18.72 12.4 18.15 12.76L9.85 17.96C9.25 18.32 8.5 17.9 8.5 17.2V6.8Z" fill="white"/>',
+        pause: '<rect x="7" y="6" width="3.6" height="12" rx="1.2" fill="white"/><rect x="13.4" y="6" width="3.6" height="12" rx="1.2" fill="white"/>'
+      };
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">${paths[type] || paths.play}</svg>`;
+      return nativeImage.createFromDataURL('data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64'));
     }
 
     mainWindow.setThumbarButtons([
