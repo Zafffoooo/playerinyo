@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Playerinyo
+Comment=Offline music player
+Exec=playerinyo
+Icon=playerinyo
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupNotify=true
+StartupWMClass=playerinyo

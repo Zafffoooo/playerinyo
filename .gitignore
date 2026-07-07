@@ -3,3 +3,10 @@ out/
 dist/
 *.log
 *.csv
+
+# Local agent/session exports
+allah.md
+playleirnyo.md
+session-ses_*.md
+session-ses_*.mds
+spotify-xxl_png.png
