@@ -1,8 +1,8 @@
 {
   "dependencies": {
+    "@phosphor-icons/web": "2.1.2",
     "csv-parse": "^5.5.5",
     "discord-rpc": "^4.0.1",
-    "metaflac-js": "^1.0.5",
     "mpris-service": "^2.1.2",
     "music-metadata": "^11.12.3",
     "node-id3": "^0.2.9"
@@ -13,7 +13,8 @@
   "description": "Offline music player",
   "main": "main.js",
   "scripts": {
-    "package": "electron-forge package",
+    "test": "node --test",
+    "package": "node scripts/package.js",
     "start": "electron .",
     "linux:install-desktop": "bash scripts/install-linux-desktop.sh"
   },
@@ -27,7 +28,13 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "@electron-forge/cli": "^7.11.1",
+    "@electron/packager": "20.0.4",
+    "@electron/rebuild": "4.2.0",
     "electron": "^41.2.1"
+  },
+  "allowScripts": {
+    "abstract-socket@2.1.1": true,
+    "electron@41.2.1": true,
+    "register-scheme": false
   }
 }

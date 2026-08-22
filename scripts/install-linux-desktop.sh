@@ -42,6 +42,10 @@ desktop_contents=${desktop_contents/Icon=$APP_ID/Icon=$desktop_icon}
 
 if [[ -x "$PACKAGE_BINARY" ]]; then
   mkdir -p "$INSTALL_DIR"
+  # Electron prefers app.asar. A prior non-ASAR install may still leave a
+  # loose resources/app tree behind; remove that package-owned stale tree so
+  # it cannot confuse icon/resource inspection after an upgrade.
+  rm -rf "$INSTALL_DIR/resources/app"
   cp -a "$PACKAGE_DIR/." "$INSTALL_DIR/"
   desktop_exec=${INSTALL_BINARY//\\/\\\\}
   desktop_exec=${desktop_exec//\"/\\\"}

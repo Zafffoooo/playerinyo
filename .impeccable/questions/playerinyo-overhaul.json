@@ -1,0 +1,78 @@
+{
+  "title": "Playerinyo için yeni görsel dünyayı seç",
+  "question": "Her yön aynı çalışan ürünü farklı bir koleksiyon çalışma alanına dönüştürüyor. Kartları aç, detayları karşılaştır ve istersen yön seçmeden önce sohbette her birine 10 üzerinden puan ver.",
+  "options": [
+    {
+      "id": "assigned-test-pressing",
+      "label": "Test Pressing Ledger",
+      "kicker": "ATANAN ANA YÖN",
+      "lineage": "Plak basım tesisi kalite formları, test baskıları ve arşiv kayıt fişleri",
+      "thesis": "Kütüphane, dinleme ve bakımın aynı fiziksel kayıt üzerinde buluştuğu yaşayan bir koleksiyon defteri.",
+      "palette": ["#171512", "#eee5d6", "#e84d26", "#284f55", "#d7b950"],
+      "materials": ["test pressing etiketi", "arşiv kağıdı", "QC damgası", "runout çizgileri"],
+      "viewport": "Koyu bir arşiv kabuğu içinde açık renk koleksiyon ledger'ı, kapak duvarı, bakım kuyruğu ve mekanik transport şeridi.",
+      "case": "Sahiplik ve koleksiyon bakımı en güçlü biçimde görünür; ürün netliği ile koleksiyoncu kimliğini birlikte taşıyor.",
+      "risk": "Kağıt ve endüstriyel detay dengesi kurulamazsa arayüz gereğinden nostaljik görünebilir.",
+      "sketch": ".impeccable/sketches/playerinyo-test-pressing.svg"
+    },
+    {
+      "id": "challenger-teletext",
+      "label": "Teletext Jukebox",
+      "kicker": "GÜÇLÜ ALTERNATİF",
+      "lineage": "Yayın teletext dergileri ve üç haneli doğrudan sayfa navigasyonu",
+      "thesis": "Koleksiyon bir yayın servisi gibi taranır: hızlı, numaralı, renk kodlu ve tamamen doğrudan.",
+      "palette": ["#050505", "#fff600", "#21d5ef", "#1515c9", "#ff2222"],
+      "materials": ["40x24 hücre", "bitmap bloklar", "yayın renkleri", "HOLD/REVEAL durumları"],
+      "viewport": "Siyah hücre ızgarasında büyük sarı koleksiyon başlığı, mozaik kapaklar ve kesintisiz mavi transport bandı.",
+      "case": "Doğrudan navigasyon ve durum görünürlüğü çok güçlü; koleksiyoncu bağı ana yöne göre daha dolaylı.",
+      "risk": "Yoğun metadata ve albüm görselleri hücre disiplinine kötü çevrilirse oyuncak gibi hissedebilir.",
+      "sketch": ".impeccable/sketches/playerinyo-teletext.svg",
+      "hero": "https://impeccable.style/worlds/cards/broadcast-programming-teletext-service-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/broadcast-programming-teletext-service.webp"
+    },
+    {
+      "id": "challenger-type-specimen",
+      "label": "Type Specimen Archive",
+      "kicker": "CESUR ALTERNATİF",
+      "lineage": "Değişken yazı tipi specimen'ları, foundry katalogları ve baskı prova sayfaları",
+      "thesis": "Albüm kimliği kapak kadar tipografiyle de kurulur; arayüz koleksiyonu hassas bir baskı arşivi gibi sergiler.",
+      "palette": ["#f7f5f0", "#151412", "#d9431d", "#b8b1a8"],
+      "materials": ["matte kağıt", "hairline grid", "proof sheet", "foundry işaretleri"],
+      "viewport": "Açık kağıt yüzeyde dev koleksiyon başlığı, katı grid, editoryal albüm plakaları ve ince transport çizgisi.",
+      "case": "Mevcut koyu müzik uygulamasından en büyük kopuşu yaratır; teknik bakım akışlarında ürün netliği daha fazla disiplin ister.",
+      "risk": "Koleksiyon yönetimi yerine bir tasarım portfolyosu gibi görünme riski var.",
+      "sketch": ".impeccable/sketches/playerinyo-type-specimen.svg",
+      "hero": "https://impeccable.style/worlds/cards/variable-font-specimen-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/variable-font-specimen.webp"
+    },
+    {
+      "id": "challenger-graphite-console",
+      "label": "Graphite Console",
+      "kicker": "OPERASYON ALTERNATİFİ",
+      "lineage": "Dark-first developer console, syntax durum renkleri ve kalıcı çalışma panelleri",
+      "thesis": "Koleksiyon, her durumu görünür olan ciddi bir operasyon yüzeyine dönüşür.",
+      "palette": ["#0c1012", "#172128", "#d8e0e5", "#58a7dd", "#56c486", "#e6ae49"],
+      "materials": ["graphite", "hairline seam", "syntax state", "persistent panels"],
+      "viewport": "Grafit zeminde sabit paneller, albüm grid'i, tag-health telemetrisi ve teknik transport yüzeyi.",
+      "case": "Ürün netliği en yüksek alternatif; fakat koleksiyoncu kimliği zayıf ve mevcut koyu tasarıma en yakın yön.",
+      "risk": "Müzik koleksiyonu kolayca geliştirici dashboard'una dönüşebilir.",
+      "sketch": ".impeccable/sketches/playerinyo-graphite-console.svg",
+      "hero": "https://impeccable.style/worlds/cards/digital-design-canon-dark-first-developer-console-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/digital-design-canon-dark-first-developer-console.webp"
+    }
+  ],
+  "reroll": true,
+  "canon": true,
+  "canonCard": {
+    "label": "Tanıdık Premium Player",
+    "kicker": "STANDART ÇIKIŞ",
+    "lineage": "Modern masaüstü streaming ve local-player düzeni",
+    "thesis": "Kategori standardını değiştirmeden, yüksek kaliteyle ve Playerinyo özellikleriyle uygular.",
+    "palette": ["#0b0c0f", "#17191f", "#f3f3f4", "#a85bd7"],
+    "materials": ["dark cards", "soft gradients", "cover grid", "persistent player"],
+    "viewport": "Sol sidebar, arama başlığı, albüm kart grid'i ve altta tanıdık player bar.",
+    "risk": "Kullanımı kolaydır fakat Playerinyo'yu diğer müzik uygulamalarından ayırmakta en zayıf seçenektir.",
+    "sketch": ".impeccable/sketches/playerinyo-canon.svg"
+  },
+  "steer": true
+}
