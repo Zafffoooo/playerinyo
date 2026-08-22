@@ -138,7 +138,6 @@ let mprisPositionUs = 0;
 let mprisPositionUpdatedAt = 0;
 let mprisDurationUs = 0;
 let mprisStopped = false;
-let spotifyTokenCache = { token: '', expiresAt: 0, key: '' };
 const metadataCoverCache = new Map();
 const downloadSearchCache = new Map();
 const downloadSearchInFlight = new Map();
@@ -175,7 +174,7 @@ const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz
 const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lastfm.freetls.fastly.net']);
 const APP_ENTRY_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
 const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinyo/releases/latest';
-const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken', 'spotifyClientId', 'spotifyClientSecret'];
+const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken'];
 const LASTFM_DEBUG_ENABLED = process.env.LASTFM_DEBUG === '1';
 function lastfmCredentialPresence(settings) {
   const source = settings || {};
@@ -3011,12 +3010,11 @@ function normalizeImportTrackMeta(track) {
   const trackNo = parseTrackNumber(track.trackNo || track.TrackNo || track['Track No'] || track.TrackNumber || track['Track Number']);
   const discNo = parseTrackNumber(track.discNo || track.DiscNo || track['Disc No'] || track.DiscNumber || track['Disc Number']);
   const coverUrl = track.coverUrl || track.CoverUrl || track.Cover || track.Image || track.Artwork || track.thumbnailUrl || track.thumbnail || track.downloadThumbnail || '';
-  const spotifyTrackId = track.spotifyTrackId || track['Spotify Track Id'] || track.SpotifyTrackId || '';
   const isrc = track.isrc || track.ISRC || '';
   const trackMbid = track.trackMbid || track.TrackMbid || track.recordingMbid || '';
   const downloadUrl = track.downloadUrl || track.webpageUrl || track.webpage_url || track.url || '';
   const videoId = track.videoId || track.VideoId || '';
-  return { title, artist, album, albumArtist, albumDate, genre, duration, trackNo, discNo, coverUrl, spotifyTrackId, isrc, trackMbid, downloadUrl, videoId };
+  return { title, artist, album, albumArtist, albumDate, genre, duration, trackNo, discNo, coverUrl, isrc, trackMbid, downloadUrl, videoId };
 }
 
 async function resolveCanonicalDownloadMetadata(meta) {
@@ -3540,6 +3538,12 @@ function loadSettingsFromDisk() {
         }
       });
       const loadedSettings = deserializeSettingsFromDisk(settings);
+      const removedSpotifyCredentials = ['spotifyClientId', 'spotifyClientSecret'].some((key) => Object.prototype.hasOwnProperty.call(loadedSettings, key));
+      for (const key of ['spotifyClientId', 'spotifyClientSecret']) {
+        delete loadedSettings[key];
+        delete preservedEncryptedSettings[key];
+        undecryptableSettingKeys.delete(key);
+      }
       if (Object.prototype.hasOwnProperty.call(loadedSettings, 'listeningStats')) {
         legacyListeningStats = loadedSettings.listeningStats;
         delete loadedSettings.listeningStats;
@@ -3555,6 +3559,11 @@ function loadSettingsFromDisk() {
       try { loadedSettings.radioBlocklist = sanitizeRadioBlocklistForSettings(loadedSettings.radioBlocklist); }
       catch (e) { console.warn('Ignoring invalid radio blocklist in settings.json:', e.message); loadedSettings.radioBlocklist = { version: 1, tracks: [], artists: [] }; }
       appSettings = { ...appSettings, ...loadedSettings };
+      if (removedSpotifyCredentials) {
+        // Spotify metadata lookup has been retired; remove old credentials
+        // from the on-disk settings file during the next startup.
+        persistSettingsStorage(appSettings).catch((error) => console.warn('Could not remove retired Spotify settings:', error.message || error));
+      }
       if (fs.existsSync(LISTENING_STATS_FILE)) {
         const storedStats = readAppDataFile(LISTENING_STATS_FILE, {}, 'listening-stats.json', (value) => {
           if (!isPlainObject(value)) throw new Error('expected an object');
@@ -4951,39 +4960,6 @@ function joinSourceNames(items) {
   return Array.isArray(items) ? items.map(item => item && (item.name || item.artist || '')).filter(Boolean).join(', ') : '';
 }
 
-async function getSpotifyAccessToken(clientId, clientSecret) {
-  clientId = String(clientId || '').trim();
-  clientSecret = String(clientSecret || '').trim();
-  if (!clientId || !clientSecret) return '';
-  const cacheKey = crypto.createHash('sha1').update(clientId + ':' + clientSecret).digest('hex');
-  if (spotifyTokenCache.token && spotifyTokenCache.key === cacheKey && Date.now() < spotifyTokenCache.expiresAt - 60000) return spotifyTokenCache.token;
-  const data = await fetchMetadataJson('https://accounts.spotify.com/api/token', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Basic ' + Buffer.from(clientId + ':' + clientSecret).toString('base64'),
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: 'grant_type=client_credentials',
-  });
-  spotifyTokenCache = { token: data.access_token || '', expiresAt: Date.now() + ((data.expires_in || 3600) * 1000), key: cacheKey };
-  return spotifyTokenCache.token;
-}
-
-function spotifyArtistNames(items) {
-  return Array.isArray(items) ? items.map(a => a && a.name).filter(Boolean).join(', ') : '';
-}
-
-function spotifyImage(images, preferredIndex = 1) {
-  if (!Array.isArray(images) || !images.length) return '';
-  return (images[preferredIndex] || images[0]).url || '';
-}
-
-async function fetchSpotifyJson(url, token) {
-  const parsed = new URL(String(url || ''));
-  if (parsed.protocol !== 'https:' || parsed.hostname !== 'api.spotify.com' || !parsed.pathname.startsWith('/v1/')) throw new Error('Invalid Spotify API URL');
-  return await fetchMetadataJson(parsed.href, { headers: { 'Authorization': 'Bearer ' + token, 'User-Agent': APP_USER_AGENT } });
-}
-
 function normalizeMetadataRelease(source, data) {
   if (!data) return null;
   if (source === 'musicbrainz') return { ...data, source: 'MusicBrainz' };
@@ -5028,34 +5004,6 @@ function normalizeMetadataRelease(source, data) {
       media: [{ position: 1, tracks: (data.tracklist || []).filter(t => t.type_ !== 'heading').map((song, index) => ({ title: song.title || '', artist: joinSourceNames(song.artists) || artist, position: index + 1, length: 0 })) }]
     };
   }
-  if (source === 'spotify') {
-    const album = data.album || data;
-    const albumArtist = spotifyArtistNames(album.artists);
-    const tracks = Array.isArray(data.tracks) ? data.tracks : ((album.tracks && album.tracks.items) || []);
-    const discs = new Map();
-    for (const song of tracks) {
-      const discNo = song.disc_number || 1;
-      if (!discs.has(discNo)) discs.set(discNo, []);
-      discs.get(discNo).push(song);
-    }
-    const discNumbers = [...discs.keys()].sort((a, b) => a - b);
-    return {
-      source: 'Spotify',
-      id: `spotify:${album.id || ''}`,
-      title: album.name || '',
-      date: safeYear(album.release_date),
-      genres: album.genres && album.genres[0] ? [{ name: album.genres[0] }] : [],
-      'artist-credit': toArtistCredit(albumArtist),
-      coverUrl: spotifyImage(album.images, 0),
-      media: discNumbers.map((discNo) => {
-        const discTracks = (discs.get(discNo) || []).sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
-        return {
-          position: discNo,
-          tracks: discTracks.map((song, index) => ({ title: song.name || '', artist: spotifyArtistNames(song.artists) || albumArtist, position: song.track_number || (index + 1), length: song.duration_ms || 0 }))
-        };
-      })
-    };
-  }
   return null;
 }
 
@@ -5074,13 +5022,6 @@ registerIpcHandler('search-metadata-sources', async (event, query, options) => {
       const parts = String(r.title || '').split(' - ');
       return normalizeSourceResult('discogs', r.id, parts.length > 1 ? parts.slice(1).join(' - ') : r.title, parts.length > 1 ? parts[0] : '', safeYear(r.year), { thumb: r.thumb || '', label: 'Discogs' });
     })).catch(() => []));
-  }
-  if (metadataOptions.spotifyClientId && metadataOptions.spotifyClientSecret) {
-    jobs.push((async () => {
-      const spotifyToken = await getSpotifyAccessToken(metadataOptions.spotifyClientId, metadataOptions.spotifyClientSecret);
-      const data = await fetchSpotifyJson(`https://api.spotify.com/v1/search?type=album&limit=8&q=${encodeURIComponent(q)}`, spotifyToken);
-      return (((data.albums || {}).items) || []).map(album => normalizeSourceResult('spotify', album.id, album.name, spotifyArtistNames(album.artists), safeYear(album.release_date), { thumb: spotifyImage(album.images, 1), label: 'Spotify' }));
-    })().catch(() => []));
   }
   const groups = await Promise.all(jobs);
   return groups.flat().filter(r => r.id);
@@ -5108,19 +5049,6 @@ registerIpcHandler('get-metadata-release', async (event, source, id, options) =>
       const token = String(metadataOptions.discogsToken || '').trim();
       if (!token) return null;
       return normalizeMetadataRelease(source, await fetchMetadataJson(`https://api.discogs.com/releases/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`, { headers }));
-    }
-    if (source === 'spotify') {
-      const spotifyToken = await getSpotifyAccessToken(metadataOptions.spotifyClientId, metadataOptions.spotifyClientSecret);
-      if (!spotifyToken) return null;
-      const album = await fetchSpotifyJson(`https://api.spotify.com/v1/albums/${encodeURIComponent(id)}`, spotifyToken);
-      const tracks = album.tracks && Array.isArray(album.tracks.items) ? album.tracks.items.slice() : [];
-      let nextUrl = album.tracks && album.tracks.next;
-      while (nextUrl) {
-        const page = await fetchSpotifyJson(nextUrl, spotifyToken);
-        tracks.push(...(page.items || []));
-        nextUrl = page.next;
-      }
-      return normalizeMetadataRelease(source, { album, tracks });
     }
     return null;
   } catch (e) {

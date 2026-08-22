@@ -1026,7 +1026,7 @@ function initAudioCtx() {
 
     // Normalization / Compressor
     audioCompressor = audioCtx.createDynamicsCompressor();
-    // Default Spotify-like normalization settings
+    // Default loudness-normalization settings
     audioCompressor.threshold.value = -24;
     audioCompressor.knee.value = 30;
     audioCompressor.ratio.value = 12;
@@ -6454,7 +6454,6 @@ function makeDownloadTrackPayload(row) {
   payload.album = getImportTrackAlbum(row);
   payload.albumDate = row && (row['Album Date'] || row.AlbumDate || row.Year || row.year || '');
   payload.genre = row && (row.Genres || row.Genre || row.genre || '');
-  payload.spotifyTrackId = row && (row['Spotify Track Id'] || row.SpotifyTrackId || '');
   payload.isrc = row && (row.ISRC || row.isrc || '');
   payload.trackMbid = row && (row.TrackMbid || row.trackMbid || '');
   payload.downloadQuality = ['best-native', 'opus', 'm4a', 'mp3'].includes(appSettings.ytdlDownloadQuality) ? appSettings.ytdlDownloadQuality : 'best-native';
@@ -7357,9 +7356,7 @@ async function runDownloadQueueJob(job) {
 
 function getMetadataSourceOptions() {
   return {
-    discogsToken: appSettings.discogsToken || '',
-    spotifyClientId: appSettings.spotifyClientId || '',
-    spotifyClientSecret: appSettings.spotifyClientSecret || ''
+    discogsToken: appSettings.discogsToken || ''
   };
 }
 function flattenMetadataReleaseTracks(release) {
@@ -9014,14 +9011,6 @@ async function persistSensitiveSetting(key, value) {
 var settDiscogsToken = $('setting-discogs-token');
 if (settDiscogsToken) settDiscogsToken.addEventListener('change', async function (e) {
   await persistSensitiveSetting('discogsToken', e.target.value.trim());
-});
-var settSpotifyClientId = $('setting-spotify-client-id');
-if (settSpotifyClientId) settSpotifyClientId.addEventListener('change', async function (e) {
-  await persistSensitiveSetting('spotifyClientId', e.target.value.trim());
-});
-var settSpotifyClientSecret = $('setting-spotify-client-secret');
-if (settSpotifyClientSecret) settSpotifyClientSecret.addEventListener('change', async function (e) {
-  await persistSensitiveSetting('spotifyClientSecret', e.target.value.trim());
 });
 function refreshDownloadFolderUi() {
   var inp = $('setting-download-folder');
@@ -11736,9 +11725,7 @@ $('meta-search-btn').addEventListener('click', async function () {
   var compareTable = $('at-track-table'); if (compareTable) compareTable.innerHTML = '<div id="at-track-empty" style="padding:40px;text-align:center;color:rgba(255,255,255,0.2);font-size:13px;">Select a result to see track matching</div>';
   $('meta-search-btn').innerHTML = '<i class="ph ph-spinner ph-spin"></i> Searching...';
   var metadataSourceOptions = {
-    discogsToken: appSettings.discogsToken || '',
-    spotifyClientId: appSettings.spotifyClientId || '',
-    spotifyClientSecret: appSettings.spotifyClientSecret || ''
+    discogsToken: appSettings.discogsToken || ''
   };
   var results;
   try {
@@ -11752,7 +11739,7 @@ $('meta-search-btn').addEventListener('click', async function () {
   if (sessionId !== metaEditorSessionSeq || requestId !== metaSearchRequestSeq) return;
   $('meta-search-btn').innerHTML = '<i class="ph ph-magnifying-glass"></i> Search Metadata';
   var resDiv = $('meta-search-results'); resDiv.innerHTML = '';
-  if (!results.length) { resDiv.style.display = 'block'; resDiv.innerHTML = '<div style="padding:12px;color:var(--text-subdued);">No results found. Try a shorter query or add Discogs/Spotify credentials in Settings.</div>'; return; }
+  if (!results.length) { resDiv.style.display = 'block'; resDiv.innerHTML = '<div style="padding:12px;color:var(--text-subdued);">No results found. Try a shorter query or add a Discogs token in Settings.</div>'; return; }
 
   results.forEach(function (r) {
     var el = document.createElement('button');
@@ -12312,8 +12299,6 @@ async function applyRuntimeSettings(options) {
     ['setting-audio-mode', 'value', appSettings.audioMode || 'stereo'],
     ['setting-discord-rpc', 'checked', !!appSettings.discordRpc],
     ['setting-discogs-token', 'value', appSettings.discogsToken || ''],
-    ['setting-spotify-client-id', 'value', appSettings.spotifyClientId || ''],
-    ['setting-spotify-client-secret', 'value', appSettings.spotifyClientSecret || ''],
     ['setting-normalization', 'checked', !!appSettings.normalization],
     ['setting-notifications', 'checked', appSettings.notifications !== false],
     ['setting-native-titlebar', 'checked', !!appSettings.useNativeTitleBar],

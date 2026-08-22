@@ -16,7 +16,6 @@ const packagerConfig = {
     /^\/forge\.config\.js$/,
     /^\/session(?:[-_.]|$)/i,
     /^\/[^/]+\.csv$/i,
-    /^\/spotify-xxl_png\.(?:ico|png)$/i,
     /^\/test-flac\.js$/,
     /^\/scripts\/package\.js$/,
   ],
