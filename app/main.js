@@ -174,7 +174,7 @@ const PLAYLIST_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm']);
 const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lastfm.freetls.fastly.net']);
 const APP_ENTRY_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
-const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinio/releases/latest';
+const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinyo/releases/latest';
 const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken', 'spotifyClientId', 'spotifyClientSecret'];
 const LASTFM_DEBUG_ENABLED = process.env.LASTFM_DEBUG === '1';
 function lastfmCredentialPresence(settings) {
