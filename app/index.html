@@ -97,7 +97,8 @@
           </div>
           <div class="header-right main-header-actions">
             <div id="zoom-controls" style="display:none;align-items:center;background:#242424;border-radius:20px;padding:3px 6px;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-              <button class="icon-btn" id="btn-multi-select" title="Toggle Multi-Select" aria-label="Toggle album multi-select" style="width:28px;height:28px;"><i class="ph ph-check-square" aria-hidden="true"></i></button>
+              <button class="icon-btn" id="btn-multi-select" title="Enable album selection" aria-label="Enable album selection" aria-pressed="false" style="width:28px;height:28px;"><i class="ph ph-check-square" aria-hidden="true"></i></button>
+              <span class="multi-select-state" id="multi-select-state" hidden aria-live="polite">Selection on</span>
               <button class="btn btn-primary" id="btn-multi-edit" style="display:none;font-size:12px;padding:2px 8px;height:24px;border-radius:12px;">Edit (0)</button>
               <button class="btn btn-outline" id="btn-multi-merge" style="display:none;font-size:12px;padding:2px 8px;height:24px;border-radius:12px;">Merge</button>
               <button class="btn btn-outline btn-danger-subtle" id="btn-multi-remove" style="display:none;font-size:12px;padding:2px 8px;height:24px;border-radius:12px;">Remove (0)</button>

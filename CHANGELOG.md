@@ -2,6 +2,13 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.1 — 2026-08-22
+
+### Fixed
+
+- Made album multi-select mode visibly active, including a clear state label and accessible pressed state.
+- Kept the current view open after removing an album from the library; removing an album from Home now refreshes Home instead of navigating to Library.
+
 ## 0.1.0 — Unreleased
 
 ### Added

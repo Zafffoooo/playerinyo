@@ -2173,6 +2173,22 @@ input[type="range"] {
 }
 .icon-btn:disabled { opacity: .38; box-shadow: none; }
 
+/* The selection tool changes what a click on an album does, so its active
+   state must remain unmistakable beside the compact toolbar control. */
+#btn-multi-select.active {
+  background: var(--accent) !important;
+  border-color: rgba(var(--accent-rgb), .8) !important;
+  color: #050505 !important;
+  box-shadow: 0 8px 20px rgba(var(--accent-rgb), .22);
+}
+.multi-select-state {
+  color: var(--text-base);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
 .albums-grid { gap: 18px; }
 .album-card {
   background: linear-gradient(180deg, rgba(var(--theme-text-rgb), .075), rgba(var(--theme-glass-rgb), .42)) !important;

@@ -9209,13 +9209,25 @@ function updateMultiSelectControls() {
   }
 }
 
+function setMultiSelectMode(enabled) {
+  isMultiSelectMode = !!enabled;
+  var multiSelectButton = $('btn-multi-select');
+  var stateLabel = $('multi-select-state');
+  if (multiSelectButton) {
+    multiSelectButton.classList.toggle('active', isMultiSelectMode);
+    multiSelectButton.setAttribute('aria-pressed', String(isMultiSelectMode));
+    multiSelectButton.setAttribute('aria-label', isMultiSelectMode ? 'Disable album selection' : 'Enable album selection');
+    multiSelectButton.title = isMultiSelectMode ? 'Disable album selection' : 'Enable album selection';
+    multiSelectButton.style.color = '';
+  }
+  if (stateLabel) stateLabel.hidden = !isMultiSelectMode;
+}
+
 var btnMultiSelect = $('btn-multi-select');
 if (btnMultiSelect) btnMultiSelect.addEventListener('click', function () {
   if (typeof isMultiSelectMode === 'undefined') window.isMultiSelectMode = false;
   if (typeof selectedAlbumsForEdit === 'undefined') window.selectedAlbumsForEdit = new Set();
-  isMultiSelectMode = !isMultiSelectMode;
-  this.classList.toggle('active', isMultiSelectMode);
-  this.style.color = isMultiSelectMode ? 'var(--accent)' : '';
+  setMultiSelectMode(!isMultiSelectMode);
   if (!isMultiSelectMode) {
     selectedAlbumsForEdit.clear();
     updateMultiSelectControls();
@@ -9237,11 +9249,7 @@ if (btnMultiMerge) btnMultiMerge.addEventListener('click', async function () {
   if (!allTracks.length) return;
   openMetadataEditor(allTracks);
   selectedAlbumsForEdit.clear();
-  isMultiSelectMode = false;
-  if ($('btn-multi-select')) {
-    $('btn-multi-select').classList.remove('active');
-    $('btn-multi-select').style.color = '';
-  }
+  setMultiSelectMode(false);
   updateMultiSelectControls();
 });
 
@@ -9255,11 +9263,7 @@ if (btnMultiRemove) btnMultiRemove.addEventListener('click', async function () {
   var removal = await removeLibraryFiles(allTracks, 'Remove selected albums from library');
   if (removal.failed) return;
   selectedAlbumsForEdit.clear();
-  isMultiSelectMode = false;
-  if ($('btn-multi-select')) {
-    $('btn-multi-select').classList.remove('active');
-    $('btn-multi-select').style.color = '';
-  }
+  setMultiSelectMode(false);
   updateMultiSelectControls();
   switchView(state.musicFiles.length ? 'library' : 'home', false);
   showUndoToast('Removed ' + removal.count + ' track' + (removal.count === 1 ? '' : 's') + ' from the library. Audio files and playlists were not deleted.', removal.snapshot);
@@ -10111,7 +10115,7 @@ if (actxRemoveLibrary) actxRemoveLibrary.addEventListener('click', async functio
   window.currentContextMenuAlbum = null;
   selectedAlbumsForEdit.delete(album.id);
   hideAllContextMenus();
-  if (!refreshSearchAfterLibraryMutation()) switchView(state.musicFiles.length ? 'library' : 'home', false);
+  if (!refreshSearchAfterLibraryMutation()) renderCurrentCollectionState();
   showUndoToast('Removed ' + count + ' track' + (count === 1 ? '' : 's') + ' from the library. Audio files and playlists were not deleted.', removal.snapshot);
 });
 
@@ -11697,12 +11701,8 @@ $('meta-save-btn').addEventListener('click', async function () {
       else switchView('library', false);
 
       if (isMultiSelectMode) {
-        isMultiSelectMode = false;
         selectedAlbumsForEdit.clear();
-        if ($('btn-multi-select')) {
-          $('btn-multi-select').classList.remove('active');
-          $('btn-multi-select').style.color = '';
-        }
+        setMultiSelectMode(false);
         updateMultiSelectControls();
         renderLibrary();
       }
