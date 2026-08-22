@@ -9,12 +9,15 @@
   },
   "name": "playerinyo",
   "productName": "Playerinyo",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Offline music player",
   "main": "app/main.js",
   "scripts": {
     "test": "node --test",
     "package": "node scripts/package.js",
+    "package:linux": "node scripts/package.js --platform=linux --arch=x64",
+    "package:mac": "node scripts/package.js --platform=darwin --arch=arm64",
+    "package:windows": "node scripts/package.js --platform=win32 --arch=x64",
     "start": "electron .",
     "linux:install-desktop": "bash scripts/install-linux-desktop.sh"
   },

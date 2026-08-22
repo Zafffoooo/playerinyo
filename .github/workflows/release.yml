@@ -1,0 +1,76 @@
+name: Publish release packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-latest
+            command: npm run package:linux
+            asset: Playerinyo-linux-x64.tar.gz
+            arch: x64
+          - name: Windows x64
+            runner: windows-latest
+            command: npm.cmd run package:windows
+            asset: Playerinyo-windows-x64.zip
+            arch: x64
+          - name: macOS Apple Silicon
+            runner: macos-15
+            command: npm run package:mac
+            asset: Playerinyo-macos-arm64.zip
+            arch: arm64
+          - name: macOS Intel
+            runner: macos-15-intel
+            command: node scripts/package.js --platform=darwin --arch=x64
+            asset: Playerinyo-macos-x64.zip
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v22
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Package application
+        run: ${{ matrix.command }}
+      - name: Archive Linux package
+        if: runner.os == 'Linux'
+        run: tar -C out -czf Playerinyo-linux-x64.tar.gz Playerinyo-linux-x64
+      - name: Archive Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path out/Playerinyo-win32-x64 -DestinationPath Playerinyo-windows-x64.zip
+      - name: Archive macOS package
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent "out/Playerinyo-darwin-${{ matrix.arch }}" "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

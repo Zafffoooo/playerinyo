@@ -18,6 +18,7 @@ const { isNormalizedPoolValue, getPersistableDiscoveryCacheEntries, setBoundedDi
 const { getLfmSignature, hasLastfmScrobbleCredentials, redactLastfmCredentials } = require('./lastfm-auth');
 const { mergeRendererSettings, clearLastfmCredentials, canPersistLastfmCredentials } = require('./lastfm-settings-lifecycle');
 const { configureLinuxPasswordStore } = require('./linux-password-store');
+const { isNewerReleaseVersion } = require('./release-update');
 const { createRadioStreamResolver } = require('./radio-stream-resolver');
 const { DurableMatchCache } = require('./radio-stream-cache');
 const { makeAlbumSizeKey, calculateAlbumSize, getAlbumRoot } = require('./album-size');
@@ -173,6 +174,7 @@ const PLAYLIST_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm']);
 const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lastfm.freetls.fastly.net']);
 const APP_ENTRY_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
+const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinio/releases/latest';
 const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken', 'spotifyClientId', 'spotifyClientSecret'];
 const LASTFM_DEBUG_ENABLED = process.env.LASTFM_DEBUG === '1';
 function lastfmCredentialPresence(settings) {
@@ -1581,6 +1583,27 @@ registerIpcHandler('check-ytdlp-tools', async () => {
     ok: ytdlp.ok && ffmpeg.ok,
     error: !ytdlp.ok ? 'yt-dlp was not found in PATH.' : (!ffmpeg.ok ? 'ffmpeg was not found in PATH.' : '')
   };
+});
+
+registerIpcHandler('check-for-app-update', async () => {
+  const currentVersion = app.getVersion();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(RELEASES_API_URL, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': APP_USER_AGENT },
+      signal: controller.signal,
+    });
+    if (response.status === 404) return { available: false, currentVersion, latestVersion: '' };
+    if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+    const release = await response.json();
+    const latestVersion = typeof release.tag_name === 'string' ? release.tag_name.slice(0, 80) : '';
+    return { available: isNewerReleaseVersion(currentVersion, latestVersion), currentVersion, latestVersion };
+  } catch (error) {
+    return { available: false, currentVersion, latestVersion: '', error: error && error.name === 'AbortError' ? 'Update check timed out.' : 'Could not check for updates.' };
+  } finally {
+    clearTimeout(timeout);
+  }
 });
 
 registerIpcHandler('search-download-candidates', async (event, track, limit, requestId) => {

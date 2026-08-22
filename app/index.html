@@ -864,6 +864,16 @@
         </div>
         <input type="checkbox" class="setting-switch" id="setting-minimize" />
       </div>
+      <div class="setting-item" style="margin-bottom:16px;flex-direction:column;align-items:flex-start;">
+        <div>
+          <label>Updates</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Checks GitHub Releases at startup. Updates are never downloaded automatically.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+          <button class="btn btn-outline" id="btn-check-app-update" type="button" style="width:auto;padding:7px 11px;border-radius:8px;font-size:12px;">Check for Updates</button>
+          <span id="app-update-status" style="font-size:11px;color:var(--text-subdued);" aria-live="polite"></span>
+        </div>
+      </div>
         </div>
       </details>
 

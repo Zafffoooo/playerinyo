@@ -9083,6 +9083,27 @@ async function checkYtdlpTools(targetEl) {
 }
 var btnCheckYtdlp = $('btn-check-ytdlp');
 if (btnCheckYtdlp) btnCheckYtdlp.addEventListener('click', function () { checkYtdlpTools($('ytdlp-status-text')); });
+async function checkForAppUpdate(manual) {
+  var status = $('app-update-status');
+  if (!window.api.checkForAppUpdate) return null;
+  if (manual && status) status.textContent = 'Checking…';
+  try {
+    var result = await window.api.checkForAppUpdate();
+    if (result && result.available) {
+      var message = 'Version ' + result.latestVersion + ' is available on GitHub Releases.';
+      if (status) status.textContent = message;
+      showToast(message);
+    } else if (manual && status) {
+      status.textContent = result && result.error ? result.error : ('You are up to date (' + ((result && result.currentVersion) || 'current version') + ').');
+    }
+    return result;
+  } catch (error) {
+    if (manual && status) status.textContent = 'Could not check for updates.';
+    return null;
+  }
+}
+var btnCheckAppUpdate = $('btn-check-app-update');
+if (btnCheckAppUpdate) btnCheckAppUpdate.addEventListener('click', function () { checkForAppUpdate(true); });
 async function refreshSafeStorageStatus() {
   var el = $('safe-storage-status');
   if (!el || !window.api.safeStorageStatus) return;
@@ -12530,6 +12551,7 @@ async function initApp() {
     catch (e) { console.error('Automatic backup initialization failed:', e); }
   }
   refreshAutomaticBackupStatus();
+  checkForAppUpdate(false);
   // Metadata-only backfill is read-only for audio files and remains separate from explicit folder.jpg writes.
   if (state.musicFiles.length > 0 && window.api.backfillMetadata) {
     var pendingBackfill = getPendingMetadataBackfillFiles(state.musicFiles);

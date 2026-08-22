@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   scanFolderImages: (folderPath) => ipcRenderer.invoke('scan-folder-images', folderPath),
   getDefaultDownloadFolder: () => ipcRenderer.invoke('get-default-download-folder'),
   checkYtdlpTools: () => ipcRenderer.invoke('check-ytdlp-tools'),
+  checkForAppUpdate: () => ipcRenderer.invoke('check-for-app-update'),
   searchDownloadCandidates: (track, limit, requestId) => ipcRenderer.invoke('search-download-candidates', track, limit, requestId),
   downloadPlaylistTrack: (track, downloadRoot, requestId) => ipcRenderer.invoke('download-playlist-track', track, downloadRoot, requestId),
   cancelDownload: (requestId) => ipcRenderer.invoke('cancel-download', requestId),
