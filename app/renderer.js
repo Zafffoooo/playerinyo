@@ -11409,6 +11409,35 @@ $('meta-save-btn').addEventListener('click', async function () {
       return null;
     }
   }
+  function applyRereadMetadata(file, metadata) {
+    if (!file || !metadata) return;
+    if (metadata.title) file.title = metadata.title;
+    if (metadata.artist) file.artist = metadata.artist;
+    if (metadata.albumartist) file.albumArtist = metadata.albumartist;
+    if (metadata.album) file.album = metadata.album;
+    if (metadata.year) file.year = metadata.year;
+    if (metadata.genre) file.genre = metadata.genre;
+    file.trackNo = metadata.trackNo || 0;
+    file.trackTotal = metadata.trackTotal || 0;
+    file.discNo = metadata.discNo || 0;
+    file.discTotal = metadata.discTotal || 0;
+  }
+  function metadataWriteMismatch(metadata, requestedTags) {
+    if (!metadata || !requestedTags) return '';
+    var fields = [
+      ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['performerInfo', 'Album Artist']
+    ];
+    for (var i = 0; i < fields.length; i++) {
+      var requestedKey = fields[i][0];
+      if (!requestedTags[requestedKey]) continue;
+      var actualKey = requestedKey === 'performerInfo' ? 'albumartist' : requestedKey;
+      var actual = String(metadata[actualKey] || '').trim();
+      if (actual !== String(requestedTags[requestedKey]).trim()) {
+        return fields[i][1] + ' was not written. The file still reports “' + (actual || 'empty') + '”.';
+      }
+    }
+    return '';
+  }
   var skippedUneditable = targetEntries.filter(function (entry) { return !isEditableMetadataFile(entry.file); });
   if (skippedUneditable.length) {
     targetEntries = targetEntries.filter(function (entry) { return isEditableMetadataFile(entry.file); });
@@ -11532,10 +11561,9 @@ $('meta-save-btn').addEventListener('click', async function () {
       libraryChanged = true;
       var appliedMetadata = await readWrittenMetadata(fp, f.filename || f.title || fp);
       if (appliedMetadata) {
-        f.trackNo = appliedMetadata.trackNo || 0;
-        f.trackTotal = appliedMetadata.trackTotal || 0;
-        f.discNo = appliedMetadata.discNo || 0;
-        f.discTotal = appliedMetadata.discTotal || 0;
+        applyRereadMetadata(f, appliedMetadata);
+        var manualMismatch = metadataWriteMismatch(appliedMetadata, tagsForThisFile);
+        if (manualMismatch) { libraryChanged = true; await failMetadataSave('Metadata verification failed for ' + (f.filename || fp) + '. ' + manualMismatch); return; }
       }
 
       var pct = Math.round(((i + 1) / targetFiles.length) * 100);
@@ -11668,10 +11696,9 @@ $('meta-save-btn').addEventListener('click', async function () {
       libraryChanged = true;
       var appliedMetadata = await readWrittenMetadata(fp, f.filename || f.title || fp);
       if (appliedMetadata) {
-        f.trackNo = appliedMetadata.trackNo || 0;
-        f.trackTotal = appliedMetadata.trackTotal || 0;
-        f.discNo = appliedMetadata.discNo || 0;
-        f.discTotal = appliedMetadata.discTotal || 0;
+        applyRereadMetadata(f, appliedMetadata);
+        var autoMismatch = metadataWriteMismatch(appliedMetadata, t);
+        if (autoMismatch) { libraryChanged = true; await failMetadataSave('Metadata verification failed for ' + (f.filename || fp) + '. ' + autoMismatch); return; }
       }
 
       var pct = Math.round(((i + 1) / targetFiles.length) * 100);

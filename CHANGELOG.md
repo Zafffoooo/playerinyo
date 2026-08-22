@@ -2,6 +2,13 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.2 — 2026-08-22
+
+### Fixed
+
+- Correctly rewrite album metadata in Opus and Ogg files. Existing Vorbis comments are retained, while the fields being edited are replaced rather than silently left at their old values.
+- Verify title, artist, album, and album-artist tags immediately after saving, so a failed write is reported before a library rescan can restore stale metadata.
+
 ## 0.1.1 — 2026-08-22
 
 ### Fixed

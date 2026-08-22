@@ -9,7 +9,7 @@
   },
   "name": "playerinyo",
   "productName": "Playerinyo",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Offline music player",
   "main": "app/main.js",
   "scripts": {

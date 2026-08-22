@@ -3420,6 +3420,35 @@ function ffmpegMetadataArgs(tags) {
   return args;
 }
 
+function ffmpegVorbisMetadataArgs(metadata, replacementTags) {
+  const nativeTags = metadata && metadata.native && Array.isArray(metadata.native.vorbis) ? metadata.native.vorbis : [];
+  const replacedNames = new Set();
+  const replacements = [
+    ['title', ['TITLE']],
+    ['artist', ['ARTIST']],
+    ['album', ['ALBUM']],
+    ['performerInfo', ['ALBUMARTIST', 'ALBUM_ARTIST', 'ALBUM ARTIST']],
+    ['year', ['DATE', 'YEAR']],
+    ['genre', ['GENRE']],
+    ['trackNumber', ['TRACKNUMBER', 'TRACK']],
+    ['discNumber', ['DISCNUMBER', 'DISC']],
+    ['trackMbid', ['MUSICBRAINZ_TRACKID', 'MUSICBRAINZ_TRACK_ID']]
+  ];
+  replacements.forEach(([field, names]) => {
+    if (replacementTags && replacementTags[field] !== undefined) names.forEach(name => replacedNames.add(name));
+  });
+  const args = [];
+  nativeTags.forEach((tag) => {
+    const name = String(tag && tag.id || '').trim();
+    const value = tag && tag.value;
+    // Picture blocks are binary values, not ordinary comments. ffmpeg carries
+    // cover streams separately via -map 0, so never turn one into text.
+    if (!name || replacedNames.has(name.toUpperCase()) || typeof value !== 'string' || !value) return;
+    args.push('-metadata', `${name.toLowerCase()}=${value.slice(0, 4000)}`);
+  });
+  return args;
+}
+
 async function remuxWebmOpusToOpus(sourcePath, outputPath, processKey) {
   const result = await runProcess('ffmpeg', ['-y', '-i', sourcePath, '-map', '0:a:0', '-c:a', 'copy', '-f', 'opus', outputPath], { timeoutMs: 60 * 1000, processKey });
   if (result.cancelled) throw new Error('Download cancelled.');
@@ -3436,7 +3465,15 @@ async function updateStreamCopyMetadata(filePath, tags) {
   const tmpPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.tmp${ext}`);
   try {
     // -c copy is the guarantee: ffmpeg only remuxes metadata/container bytes.
-    const result = await runProcess('ffmpeg', ['-y', '-i', filePath, '-map', '0', '-map_metadata', '0', '-c', 'copy', ...ffmpegMetadataArgs(tags), tmpPath], { timeoutMs: 60 * 1000 });
+    // For Ogg/Opus, `-map_metadata 0` wins over later `-metadata` arguments
+    // in FFmpeg and leaves the old Vorbis comment in place. Rebuild the text
+    // comments instead: retain unrelated ones, omit fields being changed, and
+    // write one authoritative replacement value.
+    const isVorbisContainer = ext === '.opus' || ext === '.ogg';
+    const sourceMetadata = isVorbisContainer ? await mm.parseFile(filePath, { duration: false, skipCovers: true }) : null;
+    const metadataArgs = isVorbisContainer ? ffmpegVorbisMetadataArgs(sourceMetadata, tags) : [];
+    const mapMetadataArgs = isVorbisContainer ? ['-map_metadata', '-1'] : ['-map_metadata', '0'];
+    const result = await runProcess('ffmpeg', ['-y', '-i', filePath, '-map', '0', ...mapMetadataArgs, '-c', 'copy', ...metadataArgs, ...ffmpegMetadataArgs(tags), tmpPath], { timeoutMs: 60 * 1000 });
     if (!result.ok) throw new Error(formatYtdlpError(result.stderr || result.stdout, 'Could not write native metadata without re-encoding.'));
     const stat = await fs.promises.lstat(tmpPath);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_METADATA_EDIT_BYTES) throw new Error('Edited native audio is invalid.');
@@ -4553,6 +4590,12 @@ registerIpcHandler('get-metadata', async (event, filePath) => {
     const metadata = await mm.parseFile(filePath);
     const rg = getReplayGainFields(metadata);
     return {
+      // Return the identity fields too. The renderer uses this immediately
+      // after a write, so it must reflect what the audio file actually says
+      // rather than trusting a metadata writer's success result.
+      title: metadata.common.title || null,
+      artist: metadata.common.artist || null,
+      album: metadata.common.album || null,
       year: metadata.common.year || null,
       codec: metadata.format.codec || null,
       bitrate: metadata.format.bitrate || null,
