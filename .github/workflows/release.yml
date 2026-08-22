@@ -67,11 +67,19 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Extract release notes
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          awk -v version="$version" '$0 ~ "^## " version " " { active=1; next } active && /^## / { exit } active { print }' CHANGELOG.md > RELEASE_NOTES.md
       - uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
