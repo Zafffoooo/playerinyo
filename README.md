@@ -2,6 +2,93 @@
 
 Yerel müzik arşivleri için Electron tabanlı vibecoded masaüstü oynatıcı.
 
+## Özellikler
+
+- Yerel kütüphane, albüm görünümleri ve çalma listeleri
+- Çift ses kanalıyla boşluksuz oynatma ve crossfade
+- Last.fm destekli Radyo ve YouTube tabanlı uzaktan oynatma
+- İndirme, metadata/kapak görseli düzenleme ve şarkı sözleri
+- Dinleme istatistikleri, beğeniler, yedekleme ve geri yükleme
+
+## Başlatma
+
+```bash
+npm install
+npm start
+```
+
+## Test
+
+```bash
+npm test
+```
+
+## İsteğe bağlı indirme araçları
+
+Yerel kütüphane oynatımı ek araca ihtiyaç duymaz. YouTube tabanlı uzaktan
+oynatma veya indirme özelliklerini kullanmak için hem **yt-dlp** hem de
+**ffmpeg** kurulu olmalı ve komutları sisteminizin `PATH` değişkeninde
+bulunmalıdır. Araçlardan biri yoksa yalnızca bu isteğe bağlı özellikler
+kullanılamaz; yerel kütüphaneniz çalışmaya devam eder.
+
+## Sürümler
+
+GitHub Releases, `v0.1.0` gibi bir sürüm etiketi pushlandığında aşağıdaki
+taşınabilir masaüstü paketlerini yayınlar:
+
+- **Windows 10/11 (x64):** `Playerinyo-windows-x64.zip` — taşınabilir
+  uygulama; arşivi çıkarıp `playerinyo.exe` dosyasını çalıştırın.
+- **Linux (x64):** `Playerinyo-linux-x64.tar.gz` — taşınabilir uygulama
+  klasörü; arşivi çıkarıp klasör içindeki `playerinyo` dosyasını çalıştırın.
+- **macOS (Apple Silicon):** `Playerinyo-macos-arm64.zip` — arşivi çıkarıp
+  `Playerinyo.app` uygulamasını Applications klasörüne taşıyın.
+- **macOS (Intel):** `Playerinyo-macos-x64.zip` — arşivi çıkarıp
+  `Playerinyo.app` uygulamasını Applications klasörüne taşıyın.
+
+macOS paketleri henüz kod imzalı veya notarize değildir; kullanıcıların ilk
+açılışı **System Settings → Privacy & Security** üzerinden onaylaması
+gerekebilir.
+
+Gelecekte desteklenebilecek Linux dağıtım biçimleri: **AppImage** (genel
+kullanım için en uygun), **DEB** (Debian/Ubuntu), **RPM** (Fedora/openSUSE),
+**Flatpak** ve yerel arşivlerdir. Bu depoda şimdilik evrensel `tar.gz` arşivi
+yayınlanır; mevcut masaüstü girişi yardımcısı yerel Linux kurulumu içindir.
+
+### Yerel Linux paketi oluşturma
+
+```bash
+npm run package
+npm run linux:install-desktop
+```
+
+### Yerel Windows paketi oluşturma
+
+Windows PowerShell üzerinde şunu çalıştırın:
+
+```powershell
+npm.cmd install
+npm.cmd run package:windows
+```
+
+Çıktı: `out/Playerinyo-win32-x64/`.
+
+### Yerel macOS paketi oluşturma
+
+Bunu bir Mac üzerinde çalıştırın. Varsayılan komut Apple Silicon hedefler:
+
+```bash
+npm install
+npm run package:mac
+```
+
+Intel Mac için şu komutu kullanın:
+
+```bash
+node scripts/package.js --platform=darwin --arch=x64
+```
+
+---
+
 ## Features
 
 - Local library, album views, and playlists
