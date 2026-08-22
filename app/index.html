@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: file: https:; media-src 'self' file: blob: playerinyo-stream:; connect-src 'self' https://musicbrainz.org https://ws.audioscrobbler.com https://lrclib.net; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none';">
+  <title>Playerinyo</title>
+  <link rel="icon" href="../assets/icon.png" type="image/png">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="../node_modules/@phosphor-icons/web/src/regular/style.css">
+  <link rel="stylesheet" href="../node_modules/@phosphor-icons/web/src/fill/style.css">
+  <link rel="stylesheet" href="projection-room.css">
+</head>
+<body data-visual-world="projection-room" data-dock-mode="collapsed" data-view="home">
+  <!--
+  THESIS: Playerinyo is a Projection Room for owned music; it refuses both the streaming sidebar clone and the simulated hi-fi console.
+  OWN-WORLD: Carbon-black structure, graphite light fields, white action marks, paper-white type, square sleeve frames, and a permanent listening studio.
+  STORY: The listener moves through a wall of owned sleeves, opens one into a track stage, and keeps playback, queue, lyrics, and tools beside the work.
+  FIRST VIEWPORT: A narrow destination dock, an asymmetric cover-led library stage, and a full-height right studio replace the old sidebar and bottom player.
+  FORM: Sleeve Projection Room with cover-stage composition; grounded direction four, seed 342f6825.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+  -->
+  <div class="window-titlebar">
+    <div class="window-titlebar-brand">
+      <i class="ph ph-music-notes" aria-hidden="true"></i>
+      <span>Playerinyo</span>
+    </div>
+    <div class="window-titlebar-center">Projection Room / Local Library</div>
+    <div class="window-titlebar-controls">
+      <button class="window-btn" id="window-minimize" aria-label="Minimize window"><i class="ph ph-minus" aria-hidden="true"></i></button>
+      <button class="window-btn" id="window-maximize" aria-label="Maximize window"><i class="ph ph-square" aria-hidden="true"></i></button>
+      <button class="window-btn close" id="window-close" aria-label="Close window"><i class="ph ph-x" aria-hidden="true"></i></button>
+    </div>
+  </div>
+  <div class="app-container">
+    <div class="top-section">
+
+      <nav class="sidebar projection-dock" id="sidebar" aria-label="Primary navigation">
+        <button type="button" class="logo" id="dock-mode-toggle" aria-label="Expand playlist dock" aria-pressed="false" title="Expand playlist dock">
+          <i class="ph-fill ph-waveform" aria-hidden="true"></i>
+          <span class="sr-only">Playerinyo</span>
+        </button>
+
+        <div class="nav-menu" aria-label="Library destinations">
+          <button type="button" class="nav-item active" id="nav-home" aria-current="page">
+            <i class="ph ph-house" aria-hidden="true"></i>
+            <span>Home</span>
+          </button>
+          <button type="button" class="nav-item" id="nav-library">
+            <i class="ph ph-books" aria-hidden="true"></i>
+            <span>Library</span>
+          </button>
+          <button type="button" class="nav-item" id="nav-playlists">
+            <i class="ph ph-list-plus" aria-hidden="true"></i>
+            <span>Playlists</span>
+          </button>
+          <button type="button" class="nav-item" id="nav-radio">
+            <i class="ph ph-radio" aria-hidden="true"></i>
+            <span>Radio</span>
+          </button>
+          <button type="button" class="nav-item" id="nav-health">
+            <i class="ph ph-stethoscope" aria-hidden="true"></i>
+            <span>Tag Health</span>
+          </button>
+          <button type="button" class="nav-item" id="nav-stats">
+            <i class="ph ph-chart-bar" aria-hidden="true"></i>
+            <span>History</span>
+          </button>
+        </div>
+        <div class="dock-recent-playlists" id="dock-recent-playlists" aria-label="Playlists, recent first" hidden></div>
+        <div class="dock-utilities" aria-label="Application tools">
+          <button class="nav-item dock-tool download-queue-trigger" id="btn-download-queue" title="Downloads" aria-label="Open downloads"><i class="ph ph-download-simple" aria-hidden="true"></i><span>Downloads</span><b id="download-queue-badge" class="download-queue-badge"></b></button>
+          <button class="nav-item dock-tool" id="btn-shortcuts-help" title="Keyboard shortcuts and help" aria-label="Keyboard shortcuts and help"><i class="ph ph-question" aria-hidden="true"></i><span>Shortcuts</span></button>
+          <button class="nav-item dock-tool" id="btn-settings" title="Settings" aria-label="Open settings"><i class="ph ph-gear" aria-hidden="true"></i><span>Settings</span></button>
+        </div>
+      </nav>
+
+      <!-- Main Content -->
+      <main class="main-content" id="main-content">
+        <header class="main-header">
+          <div class="header-nav main-header-primary">
+            <div class="history-controls">
+              <button class="icon-btn" id="btn-nav-back" aria-label="Go back"><i class="ph ph-caret-left" aria-hidden="true"></i></button>
+              <button class="icon-btn" id="btn-nav-forward" aria-label="Go forward"><i class="ph ph-caret-right" aria-hidden="true"></i></button>
+            </div>
+            <div class="search-bar global-search-shell">
+              <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+              <input type="search" id="global-search" placeholder="Search your collection" aria-label="Search your collection" aria-describedby="global-search-help"
+                autocomplete="off" />
+              <kbd aria-hidden="true">Ctrl K</kbd>
+              <span class="sr-only" id="global-search-help">Search tracks, albums, and artists. Filters such as artist, genre, year, and missing cover are supported.</span>
+            </div>
+          </div>
+          <div class="header-right main-header-actions">
+            <div id="zoom-controls" style="display:none;align-items:center;background:#242424;border-radius:20px;padding:3px 6px;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+              <button class="icon-btn" id="btn-multi-select" title="Toggle Multi-Select" aria-label="Toggle album multi-select" style="width:28px;height:28px;"><i class="ph ph-check-square" aria-hidden="true"></i></button>
+              <button class="btn btn-primary" id="btn-multi-edit" style="display:none;font-size:12px;padding:2px 8px;height:24px;border-radius:12px;">Edit (0)</button>
+              <button class="btn btn-outline" id="btn-multi-merge" style="display:none;font-size:12px;padding:2px 8px;height:24px;border-radius:12px;">Merge</button>
+              <button class="btn btn-outline btn-danger-subtle" id="btn-multi-remove" style="display:none;font-size:12px;padding:2px 8px;height:24px;border-radius:12px;">Remove (0)</button>
+              <div class="zoom-divider" aria-hidden="true"></div>
+              <button class="icon-btn" id="btn-zoom-out" aria-label="Decrease album size" style="width:28px;height:28px;"><i class="ph ph-minus" aria-hidden="true"></i></button>
+              <button class="icon-btn" id="btn-zoom-in" aria-label="Increase album size" style="width:28px;height:28px;"><i class="ph ph-plus" aria-hidden="true"></i></button>
+            </div>
+          </div>
+        </header>
+
+        <div class="content-scroll" id="content-area">
+          <div id="view-title-container">
+            <h1 id="view-title" style="display:none;">Library</h1>
+            <div id="library-sort-controls" class="view-title-actions" style="display:none;">
+              <label for="library-sort-select">Sort by</label>
+              <select id="library-sort-select">
+                <option value="artist">Artist (A-Z)</option>
+                <option value="album">Album (A-Z)</option>
+                <option value="year">Year</option>
+                <option value="recent">Recently Added</option>
+              </select>
+            </div>
+          </div>
+          
+          <!-- Stats Dashboard (standalone - kept for programmatic use) -->
+          <div id="stats-container" style="display:none;padding:24px;padding-bottom:60px;"></div>
+          <div id="metadata-health-container" style="display:none;padding:24px;padding-bottom:60px;"></div>
+          <section id="radio-container" class="radio-view" style="display:none;" aria-labelledby="radio-title"></section>
+
+          <section id="playlists-grid-container" class="playlist-workspace" style="display:none;" aria-labelledby="playlists-workspace-title">
+            <header class="playlist-workspace-head">
+              <div>
+                <h1 id="playlists-workspace-title">Playlists</h1>
+                <p>Build, import, and return to your own listening sequences.</p>
+              </div>
+              <div class="playlist-workspace-actions">
+                <button class="btn btn-outline" id="import-playlist-btn"><i class="ph ph-file-arrow-up" aria-hidden="true"></i> Import Playlist</button>
+                <button class="btn btn-outline" id="create-smart-mix-btn"><i class="ph ph-sparkle" aria-hidden="true"></i> New Smart Mix</button>
+                <button class="btn btn-primary" id="create-playlist-btn"><i class="ph ph-plus" aria-hidden="true"></i> New playlist</button>
+                <button class="icon-btn ghost" id="btn-fullscreen-playlists" title="Close playlists" aria-label="Close playlists"><i class="ph ph-x" aria-hidden="true"></i></button>
+              </div>
+            </header>
+            <label class="playlist-workspace-search" for="playlist-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="search" id="playlist-search" placeholder="Search playlists" /></label>
+            <p class="playlist-search-empty" id="playlist-search-empty" hidden>No playlists or Smart Mixes match this search.</p>
+            <section class="playlist-workspace-section" id="smart-mixes-section" aria-labelledby="smart-mixes-title">
+              <header class="playlist-workspace-section-head">
+                <div>
+                  <h2 id="smart-mixes-title">Smart Mixes</h2>
+                  <p>Stable selections shaped from your local library.</p>
+                </div>
+              </header>
+              <div class="smart-mixes-grid" id="smart-mixes-list"></div>
+            </section>
+            <section class="playlist-workspace-section" id="regular-playlists-section" aria-labelledby="regular-playlists-title">
+              <header class="playlist-workspace-section-head">
+                <div>
+                  <h2 id="regular-playlists-title">Playlists</h2>
+                  <p>Hand-built sequences and imported lists.</p>
+                </div>
+              </header>
+              <div class="playlists-container playlists-grid" id="playlists-list"></div>
+            </section>
+          </section>
+
+          <!-- Home Dashboard -->
+          <div id="home-dashboard-container" style="display:block;padding-bottom:40px;">
+
+            <section class="empty-library-state" id="home-empty-library" hidden aria-labelledby="home-empty-library-title">
+              <div class="empty-library-mark" aria-hidden="true"><i class="ph ph-folder-notch-open"></i></div>
+              <div class="empty-library-copy">
+                <h1 id="home-empty-library-title">Bring your collection into focus.</h1>
+                <p>Choose a music folder and Playerinyo will build a local index without moving or uploading your audio files.</p>
+                <div class="empty-library-actions">
+                  <button type="button" class="btn btn-primary" id="home-import-folder-btn"><i class="ph ph-folder-open" aria-hidden="true"></i> Choose music folder</button>
+                  <button type="button" class="btn btn-outline" id="home-import-backup-btn" data-startup-recovery><i class="ph ph-upload-simple" aria-hidden="true"></i> Restore a backup</button>
+                </div>
+                <div class="empty-library-notes"><span>MP3</span><span>FLAC</span><span>M4A</span><span>WAV</span><strong>Your files stay where they are.</strong></div>
+                <div class="empty-library-status" id="home-import-status" role="status" aria-live="polite"></div>
+              </div>
+            </section>
+
+            <div id="home-library-content">
+
+            <section class="home-overview" aria-label="Collection overview">
+              <div class="home-overview-heading">
+                <h1>Choose the next sleeve.</h1>
+                <p>Your files stay local. The room keeps listening history, recent additions, and the records you return to close at hand.</p>
+              </div>
+              <div id="home-stats-bar" class="home-stats-bar"></div>
+            </section>
+
+            <nav class="home-maintenance-rail" aria-label="Collection tools">
+              <span class="home-maintenance-label">Library tools</span>
+              <button type="button" data-collection-action="import"><i class="ph ph-folder-open" aria-hidden="true"></i><span>Import music</span></button>
+              <button type="button" data-collection-action="rescan"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i><span>Rescan folders</span></button>
+              <button type="button" data-collection-action="health"><i class="ph ph-heartbeat" aria-hidden="true"></i><span>Tag health</span></button>
+              <button type="button" data-collection-action="downloads"><i class="ph ph-download-simple" aria-hidden="true"></i><span>Downloads</span></button>
+              <button type="button" data-collection-action="settings"><i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>Settings</span></button>
+            </nav>
+
+            <section class="home-shelf home-shelf-primary" aria-labelledby="recently-added-heading">
+              <div class="home-shelf-header">
+                <div>
+                  <h2 id="recently-added-heading">Recently added</h2>
+                  <p>Newest records in your local library.</p>
+                </div>
+              </div>
+              <div class="albums-grid" id="home-recently-added"></div>
+            </section>
+
+            <section class="home-shelf" aria-labelledby="most-played-heading">
+              <div class="home-shelf-header">
+                <div>
+                  <h2 id="most-played-heading">Most played</h2>
+                  <p>Albums you return to most.</p>
+                </div>
+              </div>
+              <div class="albums-grid" id="home-most-played"></div>
+            </section>
+
+            <section class="home-shelf" aria-labelledby="rediscover-heading">
+              <div class="home-shelf-header">
+                <div>
+                  <h2 id="rediscover-heading">Rediscover your library</h2>
+                  <p>A fresh pull from your own shelves.</p>
+                </div>
+                <button class="icon-btn ghost home-shelf-refresh" id="btn-refresh-random-albums" title="Show different albums" aria-label="Show different albums"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+              </div>
+              <div class="albums-grid" id="home-random-albums"></div>
+            </section>
+
+            <section class="home-shelf home-shelf-lastfm" aria-labelledby="recommended-heading">
+              <div class="home-shelf-header">
+                <div>
+                  <h2 id="recommended-heading"><i class="ph-fill ph-lastfm-logo" aria-hidden="true"></i> Recommended for you</h2>
+                  <p id="lastfm-status-text">Not connected</p>
+                </div>
+                <button class="icon-btn ghost home-shelf-refresh" id="btn-refresh-lastfm" title="Refresh recommendations" aria-label="Refresh recommendations" style="display:none;"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+              </div>
+              <div class="albums-grid" id="home-recommendations"></div>
+              <div id="home-recommendations-empty" class="home-recommendations-empty">
+                <i class="ph-fill ph-lastfm-logo" aria-hidden="true"></i>
+                Connect Last.fm in Settings to get recommendations based on your listening history.
+              </div>
+            </section>
+            </div>
+          </div>
+
+          <!-- Albums Grid -->
+          <div class="albums-grid-container" id="albums-grid-container" style="display:none;">
+            <div class="albums-grid" id="albums-grid"></div>
+            <section class="empty-library-state compact" id="library-empty-state" hidden aria-labelledby="library-empty-title">
+              <div class="empty-library-mark" aria-hidden="true"><i class="ph ph-vinyl-record"></i></div>
+              <div class="empty-library-copy">
+                <h2 id="library-empty-title">Your shelves are ready.</h2>
+                <p>Import a folder to browse albums here. Playerinyo indexes supported audio in place and keeps the original files untouched.</p>
+                <button type="button" class="btn btn-primary" id="library-import-folder-btn"><i class="ph ph-folder-open" aria-hidden="true"></i> Choose music folder</button>
+              </div>
+            </section>
+          </div>
+
+          <!-- Search Albums -->
+          <div id="search-albums-container" style="display:none;margin-top:24px;margin-bottom:24px;">
+            <h2 style="font-size:14px;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px;color:var(--text-subdued);">Albums</h2>
+            <div class="albums-grid" id="search-albums-grid"></div>
+          </div>
+
+          <!-- Tracks Table -->
+          <div class="tracks-table-container" id="tracks-table-container" style="display:none;">
+            <div class="album-detail-header" id="album-detail-header" style="display:none;">
+              <div class="album-detail-cover-wrap" id="album-detail-cover-wrap">
+                <img class="album-detail-cover" id="album-detail-cover" src="../assets/icon.png" alt="" />
+                <button type="button" class="album-cover-play-btn" id="album-cover-play-btn" aria-label="Play album">
+                  <i class="ph ph-play-fill" aria-hidden="true"></i>
+                </button>
+              </div>
+              <div class="album-detail-info">
+                <div class="album-type" id="album-detail-type">Album</div>
+                <h1 class="album-detail-title" id="album-detail-title">Album Name</h1>
+                <div class="album-detail-artist" id="album-detail-artist">Artist</div>
+                <div class="album-detail-meta" id="album-detail-meta" style="font-size:12px;color:var(--text-subdued);margin-top:8px;"></div>
+                <div class="smart-mix-detail-actions" id="smart-mix-detail-actions" hidden>
+                  <button type="button" class="btn btn-primary" id="smart-mix-refresh-btn"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Refresh Mix</button>
+                  <button type="button" class="btn btn-outline" id="smart-mix-edit-btn"><i class="ph ph-pencil-simple" aria-hidden="true"></i> Edit</button>
+                  <button type="button" class="btn btn-outline smart-mix-delete-btn" id="smart-mix-delete-btn"><i class="ph ph-trash" aria-hidden="true"></i> Delete</button>
+                </div>
+                <button type="button" class="icon-btn ghost playlist-detail-actions" id="playlist-detail-actions" aria-label="Playlist actions" aria-haspopup="menu" aria-controls="playlist-context-menu" title="Playlist actions" hidden>
+                  <i class="ph ph-dots-three" aria-hidden="true"></i>
+                </button>
+                <div id="playlist-controls-container" style="display:none;margin-top:12px;align-items:center;justify-content:space-between;gap:12px;width:100%;">
+                  <div id="playlist-sort-container" class="playlist-sort-controls">
+                    <span class="playlist-sort-label" id="playlist-sort-label">Sort by</span>
+                    <div class="playlist-sort-picker">
+                      <button type="button" class="playlist-sort-button" id="playlist-sort-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="playlist-sort-listbox" aria-labelledby="playlist-sort-label playlist-sort-value">
+                        <span id="playlist-sort-value">Custom Order</span>
+                        <i class="ph ph-caret-down" aria-hidden="true"></i>
+                      </button>
+                      <div class="playlist-sort-listbox" id="playlist-sort-listbox" role="listbox" aria-labelledby="playlist-sort-label" tabindex="-1" hidden>
+                        <div id="playlist-sort-option-custom" class="playlist-sort-option" role="option" data-value="Custom Order" aria-selected="true">Custom Order</div>
+                        <div id="playlist-sort-option-title" class="playlist-sort-option" role="option" data-value="Title" aria-selected="false">Title</div>
+                        <div id="playlist-sort-option-artist" class="playlist-sort-option" role="option" data-value="Artist" aria-selected="false">Artist</div>
+                        <div id="playlist-sort-option-album" class="playlist-sort-option" role="option" data-value="Album" aria-selected="false">Album</div>
+                        <div id="playlist-sort-option-recent" class="playlist-sort-option" role="option" data-value="Recently Added" aria-selected="false">Recently Added</div>
+                      </div>
+                    </div>
+                    <button type="button" class="playlist-sort-direction" id="playlist-sort-dir-btn" aria-label="Sort ascending" title="Sort ascending">
+                      <i class="ph ph-sort-ascending" aria-hidden="true"></i>
+                    </button>
+                  </div>
+                  <div class="search-bar" style="position:relative; max-width:250px; flex:1;">
+                    <i class="ph ph-magnifying-glass" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-subdued);pointer-events:none;"></i>
+                    <input type="text" id="playlist-track-search" placeholder="Search in playlist (Ctrl+F)"
+                      style="width:100%;padding:6px 16px 6px 32px;border-radius:16px;border:1px solid var(--border);background:#242424;color:white;font-size:12px;" />
+                  </div>
+                </div>
+                <button id="album-edit-metadata-btn" style="display:none;align-self:flex-start;margin-top:8px;padding:4px 10px;background:transparent;border:1px solid var(--border);border-radius:14px;color:var(--text-subdued);font-size:11px;line-height:1;cursor:pointer;align-items:center;gap:5px;">
+                  <i class="ph ph-pencil-simple"></i> Edit Album
+                </button>
+              </div>
+            </div>
+
+            <table class="tracks-table">
+              <thead>
+                <tr>
+                  <th style="width:20px;"></th>
+                  <th class="col-num">#</th>
+                  <th class="col-title">Title</th>
+                  <th class="col-album">Album</th>
+                  <th class="col-duration"><i class="ph ph-clock"></i></th>
+                  <th style="width:40px;"></th>
+                </tr>
+              </thead>
+              <tbody id="tracks-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+
+      <aside class="listening-studio" aria-label="Listening studio">
+        <div class="studio-head">
+          <span>Listening studio</span>
+          <div>
+            <button class="icon-btn ghost" id="btn-now-playing-overlay" title="Now Playing View (N)" aria-expanded="false" aria-controls="now-playing-overlay"><i class="ph ph-arrows-out" aria-hidden="true"></i></button>
+          </div>
+        </div>
+        <div class="player-bar">
+          <canvas id="visualizer" aria-hidden="true"></canvas>
+          <div class="studio-content">
+          <div class="now-playing" id="now-playing-info">
+            <button type="button" class="studio-artwork-trigger" id="player-artwork-trigger" aria-label="Open current artwork" disabled>
+              <span class="cover-art placeholder" id="player-cover-art"><i class="ph ph-music-notes" id="player-cover-placeholder" aria-hidden="true"></i></span>
+            </button>
+            <div class="track-details">
+              <button type="button" class="track-name studio-metadata-link" id="player-track-name" disabled>No track selected</button>
+              <button type="button" class="track-artist studio-metadata-link" id="player-track-artist" disabled>Choose something from your library</button>
+              <div class="playback-feedback" id="playback-feedback" role="status" aria-live="polite" hidden></div>
+              <div class="track-album" id="player-track-album"></div>
+              <div class="replaygain-chip missing" id="replaygain-status-chip">RG idle</div>
+            </div>
+            <button class="icon-btn ghost" id="btn-like" aria-label="Like current track" aria-pressed="false" disabled><i class="ph ph-heart" id="like-icon" aria-hidden="true"></i></button>
+          </div>
+
+          <div class="player-controls">
+        <div class="controls-buttons">
+          <button class="icon-btn ghost playback-mode-control" id="btn-shuffle" data-mode="off" aria-label="Shuffle mode: Off" aria-pressed="false" title="Shuffle: Off"><span class="playback-mode-icon"><i class="ph ph-shuffle" id="shuffle-icon" aria-hidden="true"></i></span><span class="playback-mode-label">OFF</span></button>
+          <button class="icon-btn ghost" id="btn-prev" aria-label="Previous track"><i class="ph ph-skip-back-circle" aria-hidden="true"></i></button>
+          <button class="icon-btn play-btn" id="btn-play" aria-label="Play"><i class="ph ph-play-circle" id="play-icon" aria-hidden="true"></i></button>
+          <button class="icon-btn ghost" id="btn-next" aria-label="Next track"><i class="ph ph-skip-forward-circle" aria-hidden="true"></i></button>
+          <button class="icon-btn ghost playback-mode-control" id="btn-loop" data-mode="off" aria-label="Repeat mode: Off" aria-pressed="false" title="Repeat: Off"><span class="playback-mode-icon"><i class="ph ph-repeat" id="loop-icon" aria-hidden="true"></i></span><span class="playback-mode-label">OFF</span></button>
+        </div>
+        <div class="playback-bar">
+          <span class="time-current" id="time-current">0:00</span>
+          <div class="progress-bar-container" id="progress-container" role="slider" tabindex="0" aria-label="Playback position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00 of 0:00" aria-disabled="true">
+            <div class="progress-bar" id="progress-bar">
+              <div class="progress-thumb"></div>
+            </div>
+          </div>
+          <span class="time-total" id="time-total">0:00</span>
+        </div>
+          </div>
+
+          <div class="player-extras">
+            <button class="icon-btn ghost" id="btn-lastfm-login" title="Connect to Last.fm"><i class="ph-fill ph-lastfm-logo" id="lastfm-icon"></i></button>
+            <button class="icon-btn ghost" id="btn-eq" title="Equalizer"><i class="ph ph-sliders"></i></button>
+            <button class="icon-btn ghost studio-tab" id="btn-queue-toggle" title="Queue" aria-expanded="false" aria-controls="queue-panel"><i class="ph ph-queue"></i><span>Queue</span></button>
+            <button class="icon-btn ghost studio-tab" id="btn-lyrics-toggle" title="Lyrics" aria-expanded="false" aria-controls="lyrics-panel"><i class="ph ph-microphone-stage"></i><span>Lyrics</span></button>
+            <div class="studio-volume-control">
+              <button type="button" class="icon-btn ghost player-volume-icon" id="btn-volume-toggle" aria-label="Mute" aria-pressed="false"><i class="ph ph-speaker-high" aria-hidden="true"></i></button>
+              <div class="volume-bar-container" role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-valuetext="100 percent">
+                <div class="progress-bar volume-bar" id="volume-bar" style="width:100%;"><div class="progress-thumb"></div></div>
+              </div>
+              <output id="volume-value" aria-live="off">100%</output>
+            </div>
+          </div>
+
+          <div class="studio-panels">
+            <div class="queue-panel" id="queue-panel" role="complementary" aria-label="Playback queue" aria-hidden="true" inert>
+              <div class="queue-header"><span>Up next</span><button class="icon-btn" id="btn-close-queue" aria-label="Close queue"><i class="ph ph-x" aria-hidden="true"></i></button></div>
+              <div class="queue-list" id="queue-list"></div>
+            </div>
+            <div class="lyrics-panel" id="lyrics-panel" role="complementary" aria-label="Lyrics" aria-hidden="true" inert>
+              <div class="queue-header">
+                <span>Lyrics</span>
+                <div class="lyrics-panel-tools">
+                  <button class="icon-btn" id="btn-lyrics-offset-down" title="Lyrics -0.5s">-</button>
+                  <span id="lyrics-offset-val">0.0s</span>
+                  <button class="icon-btn" id="btn-lyrics-offset-up" title="Lyrics +0.5s">+</button>
+                  <button class="icon-btn" id="btn-lyrics-load-file" title="Load .lrc file"><i class="ph ph-file-text" aria-hidden="true"></i></button>
+                  <button class="icon-btn" id="btn-close-lyrics" aria-label="Close lyrics"><i class="ph ph-x" aria-hidden="true"></i></button>
+                </div>
+              </div>
+              <div class="lyrics-content" id="lyrics-content">
+                <div class="lyrics-empty"><i class="ph ph-microphone-stage" aria-hidden="true"></i><p>No lyrics loaded</p><small>Auto-fetches from LRCLIB</small></div>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ══════════════ NOW PLAYING OVERLAY ══════════════ -->
+  <div id="now-playing-overlay" class="np-overlay" role="dialog" aria-modal="true" aria-label="Now Playing" aria-hidden="true" inert>
+    <!-- Blurred bg pulled from album art -->
+    <div class="np-bg-blur" id="np-bg-blur"></div>
+    <div class="np-bg-vignette"></div>
+
+    <!-- Top bar -->
+    <div class="np-topbar">
+      <span class="np-label">Now Playing</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="icon-btn" id="np-queue-toggle" aria-label="Show queue" aria-expanded="false" aria-controls="np-queue-content" style="color:rgba(255,255,255,0.6);width:36px;height:36px;"><i class="ph ph-queue" aria-hidden="true"></i></button>
+        <button class="icon-btn" id="np-lyrics-toggle" aria-label="Show lyrics" aria-expanded="true" aria-controls="np-lyrics-col" style="color:rgba(255,255,255,0.6);width:36px;height:36px;"><i class="ph ph-microphone-stage" aria-hidden="true"></i></button>
+        <button class="icon-btn" id="np-close-btn" title="Close (N)" style="color:rgba(255,255,255,0.6);width:36px;height:36px;"><i class="ph ph-x"></i></button>
+      </div>
+    </div>
+
+    <!-- Main content -->
+    <div class="np-body">
+      <!-- Left: big art -->
+      <div class="np-art-col">
+        <div class="np-art-wrap" id="np-art-wrap" role="button" tabindex="-1" aria-label="Open current artwork">
+          <img class="np-art" id="np-art" src="../assets/icon.png" alt="" />
+          <div class="np-art-placeholder" id="np-art-placeholder"><i class="ph ph-music-notes" style="font-size:96px;color:rgba(255,255,255,0.2);"></i></div>
+        </div>
+        <!-- track info under art -->
+        <div class="np-track-info">
+          <button type="button" class="np-track-title np-metadata-link" id="np-track-title" disabled>No track</button>
+          <button type="button" class="np-track-artist np-metadata-link" id="np-track-artist" disabled>—</button>
+          <div class="np-playback-feedback" id="np-playback-feedback" role="status" aria-live="polite" hidden></div>
+          <div class="np-track-album" id="np-track-album"></div>
+        </div>
+        <!-- transport controls -->
+        <div class="np-controls">
+          <button class="icon-btn ghost np-ctrl-btn playback-mode-control" id="np-btn-shuffle" data-mode="off" aria-label="Shuffle mode: Off" aria-pressed="false" title="Shuffle: Off"><span class="playback-mode-icon"><i class="ph ph-shuffle" aria-hidden="true"></i></span><span class="playback-mode-label">OFF</span></button>
+          <button class="icon-btn ghost np-ctrl-btn" id="np-btn-prev" aria-label="Previous track"><i class="ph ph-skip-back-circle" aria-hidden="true"></i></button>
+          <button class="icon-btn np-play-btn" id="np-btn-play" aria-label="Play"><i class="ph ph-play-circle" id="np-play-icon" aria-hidden="true"></i></button>
+          <button class="icon-btn ghost np-ctrl-btn" id="np-btn-next" aria-label="Next track"><i class="ph ph-skip-forward-circle" aria-hidden="true"></i></button>
+          <button class="icon-btn ghost np-ctrl-btn playback-mode-control" id="np-btn-loop" data-mode="off" aria-label="Repeat mode: Off" aria-pressed="false" title="Repeat: Off"><span class="playback-mode-icon"><i class="ph ph-repeat" id="np-loop-icon" aria-hidden="true"></i></span><span class="playback-mode-label">OFF</span></button>
+          <button class="icon-btn ghost np-ctrl-btn" id="np-btn-like" aria-label="Like current track" aria-pressed="false"><i class="ph ph-heart" id="np-like-icon" aria-hidden="true"></i></button>
+        </div>
+        <!-- progress bar -->
+        <div class="np-progress-wrap">
+          <span class="np-time" id="np-time-cur">0:00</span>
+          <div class="np-progress-container" id="np-progress-container" role="slider" tabindex="0" aria-label="Now Playing position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00 of 0:00" aria-disabled="true">
+            <div class="progress-bar np-progress-bar" id="np-progress-bar"><div class="progress-thumb"></div></div>
+          </div>
+          <span class="np-time" id="np-time-total">0:00</span>
+        </div>
+      </div>
+
+      <!-- Right: queue or lyrics, both reuse the primary playback state. -->
+      <div class="np-lyrics-col" id="np-lyrics-col">
+        <div class="np-secondary-tabs" role="tablist" aria-label="Now Playing panel">
+          <button type="button" class="np-secondary-tab" id="np-queue-tab" role="tab" aria-controls="np-queue-content" aria-selected="false">Queue</button>
+          <button type="button" class="np-secondary-tab active" id="np-lyrics-tab" role="tab" aria-controls="np-lyrics-content" aria-selected="true">Lyrics</button>
+        </div>
+        <div class="np-queue-content" id="np-queue-content" role="tabpanel" aria-label="Playback queue" hidden></div>
+        <div class="np-lyrics-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+          <span>Lyrics</span>
+          <span style="display:flex;align-items:center;gap:4px;">
+            <button class="icon-btn" id="np-lyrics-offset-down" title="Lyrics -0.5s" style="width:26px;height:26px;font-size:11px;color:rgba(255,255,255,.5);">-</button>
+            <span id="np-lyrics-offset-val" style="min-width:34px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);">0.0s</span>
+            <button class="icon-btn" id="np-lyrics-offset-up" title="Lyrics +0.5s" style="width:26px;height:26px;font-size:11px;color:rgba(255,255,255,.5);">+</button>
+          </span>
+        </div>
+        <div class="np-lyrics-content" id="np-lyrics-content">
+          <div style="padding:40px 0;text-align:center;color:rgba(255,255,255,0.3);font-size:13px;">No lyrics loaded</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── MODALS ─── -->
+
+  <div id="download-queue-panel" class="download-queue-panel" role="region" aria-labelledby="download-queue-title" aria-hidden="true">
+    <div class="download-queue-head">
+      <div>
+        <strong id="download-queue-title">Downloads</strong>
+        <span id="download-queue-summary">No active downloads</span>
+      </div>
+      <div class="download-queue-actions">
+        <button class="icon-btn ghost" id="download-search-toggle" title="Search & Download" aria-label="Search and download"><i class="ph ph-magnifying-glass"></i></button>
+        <button class="icon-btn ghost" id="download-queue-clear" title="Clear completed and failed downloads" aria-label="Clear completed and failed downloads"><i class="ph ph-broom"></i></button>
+        <button class="icon-btn ghost" id="download-queue-close" title="Close" aria-label="Close downloads"><i class="ph ph-x"></i></button>
+      </div>
+    </div>
+    <section class="download-search" id="download-search" hidden aria-labelledby="download-search-title">
+      <div class="download-search-heading">
+        <strong id="download-search-title">Search &amp; Download</strong>
+        <span>Choose a YouTube result to add it to the download queue.</span>
+      </div>
+      <form class="download-search-form" id="download-search-form">
+        <input type="search" id="download-search-query" class="meta-inp" placeholder="Artist — track" autocomplete="off" aria-label="Artist and track">
+        <button class="btn btn-primary" id="download-search-submit" type="submit"><i class="ph ph-magnifying-glass" aria-hidden="true"></i> Search</button>
+      </form>
+      <div id="download-search-status" class="download-search-status" role="status" aria-live="polite"></div>
+      <div id="download-search-results" class="download-search-results" aria-live="polite"></div>
+    </section>
+    <div id="download-queue-list" class="download-queue-list"></div>
+  </div>
+
+  <div id="command-palette-modal" class="modal-overlay command-palette-overlay">
+    <div class="command-palette modal-content">
+      <div class="command-palette-search">
+        <i class="ph ph-magnifying-glass"></i>
+        <input type="text" id="command-palette-input" placeholder="Search songs, albums, playlists, commands..." autocomplete="off" />
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="command-palette-list" id="command-palette-list"></div>
+      <div class="command-palette-help">Enter to run • Up/Down to move • Esc to close</div>
+    </div>
+  </div>
+
+  <div id="shortcuts-help-modal" class="modal-overlay">
+    <div class="modal-content" style="width:640px;max-height:80vh;overflow-y:auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin:0;">Keyboard Shortcuts</h2>
+        <button class="icon-btn ghost" id="shortcuts-help-close" title="Close"><i class="ph ph-x"></i></button>
+      </div>
+      <div id="shortcuts-help-list"></div>
+    </div>
+  </div>
+
+  <div id="import-review-modal" class="modal-overlay">
+    <div class="modal-content import-review-modal" style="width:560px;">
+      <h2 style="margin-top:0;margin-bottom:8px;">Import Review</h2>
+      <div id="import-review-subtitle" style="color:var(--text-subdued);font-size:13px;margin-bottom:16px;">Library scan complete.</div>
+      <div class="import-review-grid" id="import-review-grid"></div>
+      <div class="import-review-actions">
+        <button class="btn btn-outline" id="import-review-tag-health">Open Tag Health</button>
+        <button class="btn btn-outline" id="import-review-analyze-rg">Analyze Missing ReplayGain</button>
+        <button class="btn btn-primary" id="import-review-done">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="moved-files-modal" class="modal-overlay">
+    <div class="modal-content moved-files-modal">
+      <header class="moved-files-head">
+        <div>
+          <h2 id="moved-files-title">Projection Room</h2>
+          <p id="moved-files-subtitle">Review suggested destinations before any library paths change.</p>
+        </div>
+        <button type="button" class="icon-btn ghost" id="moved-files-close" aria-label="Cancel moved-file review"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </header>
+      <div class="moved-files-summary" id="moved-files-summary" aria-live="polite"></div>
+      <div class="moved-files-toolbar">
+        <button type="button" class="btn btn-outline" id="moved-files-select-high">Select high confidence</button>
+        <span id="moved-files-selection-count">0 selected</span>
+      </div>
+      <div class="moved-files-table-wrap">
+        <table class="moved-files-table">
+          <thead>
+            <tr>
+              <th scope="col"><span class="sr-only">Apply</span></th>
+              <th scope="col">Track</th>
+              <th scope="col">Original path</th>
+              <th scope="col">Suggested path</th>
+              <th scope="col">Match</th>
+            </tr>
+          </thead>
+          <tbody id="moved-files-rows"></tbody>
+        </table>
+      </div>
+      <div class="moved-files-state" id="moved-files-state" role="status" aria-live="polite"></div>
+      <div class="moved-files-progress" id="moved-files-progress" hidden>
+        <span id="moved-files-progress-label">Preparing changes</span>
+        <div><i id="moved-files-progress-fill"></i></div>
+      </div>
+      <footer class="moved-files-actions">
+        <button type="button" class="btn btn-outline" id="moved-files-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="moved-files-apply" disabled>Apply selected</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="playlist-import-modal" class="modal-overlay">
+    <div class="modal-content playlist-import-modal" style="width:min(900px,calc(100vw - 48px));max-height:88vh;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px;">
+        <div>
+          <h2 id="playlist-import-title" style="margin:0 0 6px;">Import Playlist</h2>
+          <div id="playlist-import-subtitle" style="color:var(--text-subdued);font-size:13px;line-height:1.4;"></div>
+        </div>
+        <button class="icon-btn ghost" id="playlist-import-cancel-x" title="Cancel"><i class="ph ph-x"></i></button>
+      </div>
+      <div class="playlist-import-options" id="playlist-import-options">
+        <label for="playlist-import-conflict">Same-name playlists</label>
+        <select id="playlist-import-conflict">
+          <option value="create">Create with a unique name</option>
+          <option value="merge">Merge unique tracks</option>
+          <option value="replace">Replace existing tracks</option>
+        </select>
+      </div>
+      <div class="playlist-import-toolbar" id="playlist-import-download-tools">
+        <span class="playlist-import-toolbar-title">Download selected missing tracks</span>
+        <button class="btn btn-outline" id="playlist-import-select-missing" style="width:auto;padding:7px 11px;border-radius:10px;font-size:12px;">Select missing</button>
+        <button class="btn btn-outline" id="playlist-import-find-candidates" style="width:auto;padding:7px 11px;border-radius:10px;font-size:12px;">Search selected</button>
+        <button class="btn btn-outline" id="playlist-import-find-all-candidates" style="width:auto;padding:7px 11px;border-radius:10px;font-size:12px;">Search all missing</button>
+        <button class="btn btn-outline" id="playlist-import-stop-search" style="width:auto;padding:7px 11px;border-radius:10px;font-size:12px;" hidden>Stop search</button>
+        <button class="btn btn-outline" id="playlist-import-check-tools" style="width:auto;padding:7px 11px;border-radius:10px;font-size:12px;">Check yt-dlp</button>
+        <span id="playlist-import-tool-status" class="playlist-import-tool-status"></span>
+      </div>
+      <div id="playlist-import-download-folder" class="playlist-import-folder"></div>
+      <div id="playlist-import-list" class="playlist-import-list"></div>
+      <div id="playlist-import-status" class="playlist-import-status"></div>
+      <div id="playlist-import-progress" class="playlist-import-progress" hidden>
+        <div id="playlist-import-progress-bar" class="playlist-import-progress-bar"></div>
+        <span id="playlist-import-progress-text" class="playlist-import-progress-text"></span>
+      </div>
+      <div class="playlist-import-actions" style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;">
+        <button class="btn btn-outline" id="playlist-import-cancel" style="width:auto;padding:9px 14px;">Cancel</button>
+        <button class="btn btn-outline" id="playlist-import-only" style="width:auto;padding:9px 14px;">Import Only</button>
+        <button class="btn btn-primary" id="playlist-import-add-local" style="width:auto;padding:9px 14px;" hidden>Import + Add Selected Local Files</button>
+        <button class="btn btn-primary" id="playlist-import-download" style="width:auto;padding:9px 14px;">Import + Download Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="album-download-modal" class="modal-overlay">
+    <div class="modal-content album-download-modal" style="width:min(920px,calc(100vw - 48px));max-height:88vh;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px;">
+        <div>
+          <h2 style="margin:0 0 6px;">Download Album</h2>
+          <div id="album-download-subtitle" style="color:var(--text-subdued);font-size:13px;line-height:1.4;"></div>
+        </div>
+        <button class="icon-btn ghost" id="album-download-cancel-x" title="Cancel"><i class="ph ph-x"></i></button>
+      </div>
+      <div class="album-download-searchbar">
+        <input type="text" id="album-download-search-query" class="meta-inp" placeholder="Artist Album">
+        <button class="btn btn-outline" id="album-download-search" style="width:auto;padding:8px 14px;"><i class="ph ph-magnifying-glass"></i> Search Metadata</button>
+      </div>
+      <div class="album-download-body">
+        <div>
+          <div class="album-download-section-label">Choose Release</div>
+          <div id="album-download-results" class="album-download-results"></div>
+        </div>
+        <div>
+          <div class="album-download-section-head">
+            <div class="album-download-section-label">Tracklist Preview</div>
+            <div class="album-download-selection-actions">
+              <button type="button" class="download-job-mini-btn" id="album-download-select-missing" disabled>Select missing</button>
+              <button type="button" class="download-job-mini-btn" id="album-download-deselect-all" disabled>Deselect all</button>
+            </div>
+          </div>
+          <div id="album-download-preview" class="album-download-preview"><div class="album-download-empty">Select a metadata result.</div></div>
+        </div>
+      </div>
+      <div id="album-download-status" class="playlist-import-status"></div>
+      <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;">
+        <button class="btn btn-outline" id="album-download-cancel" style="width:auto;padding:9px 14px;">Cancel</button>
+        <button class="btn btn-primary" id="album-download-queue" style="width:auto;padding:9px 14px;" disabled>Queue Album Downloads</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EQ Modal -->
+  <div id="eq-modal" class="modal-overlay">
+    <div class="modal-content" style="width:440px;text-align:center;">
+      <h2 style="margin-top:0;margin-bottom:12px;">Equalizer</h2>
+      <div id="eq-presets" style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-bottom:20px;"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;" id="eq-sliders"></div>
+      <div style="margin-top:24px;display:flex;gap:8px;">
+        <button class="btn btn-outline" id="btn-reset-eq" style="flex:1;justify-content:center;">Reset</button>
+        <button class="btn btn-outline" id="btn-close-eq" style="flex:1;justify-content:center;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal-overlay">
+    <div class="modal-content" style="width:480px;max-height:85vh;overflow-y:auto;">
+      <div class="settings-modal-head">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="icon-btn" id="btn-close-settings-top" aria-label="Close settings"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </div>
+      <div class="settings-sections">
+      <details class="settings-section" name="settings-section">
+        <summary>Playback &amp; Audio</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:12px;">
+        <div>
+          <label for="setting-normalization">Loudness Normalization</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Uses ReplayGain when available, with a soft compressor fallback</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-normalization" />
+      </div>
+      <div class="setting-item" style="margin-bottom:24px;">
+        <label for="setting-audio-mode">Audio Output</label>
+        <select id="setting-audio-mode" style="background:#333;color:white;padding:6px 12px;border:none;border-radius:4px;font-size:14px;">
+          <option value="stereo">Stereo</option>
+          <option value="mono">Mono</option>
+        </select>
+      </div>
+      <div class="setting-item" style="margin-bottom:12px;">
+        <label for="setting-crossfade">Crossfade</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="range" id="setting-crossfade" min="0" max="10" value="0" style="width:100px;">
+          <output id="crossfade-val" for="setting-crossfade" style="font-size:12px;color:var(--text-subdued);width:30px;">0s</output>
+        </div>
+      </div>
+      <div class="setting-item" style="margin-bottom:12px;">
+        <div>
+          <label for="setting-master-gain">Master Output Gain</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Limit max volume if it's too loud globally</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="range" id="setting-master-gain" min="0" max="100" value="100" style="width:100px;">
+          <output id="master-gain-val" for="setting-master-gain" style="font-size:12px;color:var(--text-subdued);width:42px;">100%</output>
+        </div>
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section" open>
+        <summary>Music Library</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;">
+          <button class="btn btn-outline" id="btn-fast-rescan" title="Rescan for new songs only (Shortcut: Insert)" style="justify-content:center;padding:8px;border-radius:8px;">
+            <i class="ph ph-arrows-clockwise" style="margin-right:6px;"></i> Rescan Folder
+          </button>
+          <button class="btn btn-outline" id="import-folder-btn" style="justify-content:center;padding:8px;border-radius:8px;">
+            <i class="ph ph-folder-open" style="margin-right:6px;"></i> Import Folder
+          </button>
+          <button class="btn btn-outline" id="btn-write-folder-covers" style="justify-content:center;padding:8px;border-radius:8px;">
+            <i class="ph ph-image-square" style="margin-right:6px;"></i> Write folder.jpg
+          </button>
+          <button class="btn btn-outline" id="btn-open-tag-health" style="justify-content:center;padding:8px;border-radius:8px;">
+            <i class="ph ph-stethoscope" style="margin-right:6px;"></i> Tag Health
+          </button>
+          <button class="btn btn-outline" id="btn-review-moved-files" style="justify-content:center;padding:8px;border-radius:8px;grid-column:1 / -1;">
+            <i class="ph ph-git-diff" style="margin-right:6px;"></i> Review Moved Files
+          </button>
+        </div>
+        <p class="setting-explainer"><strong>folder.jpg</strong> writes the current album artwork beside your audio files so other players can reuse it.</p>
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section">
+        <summary>Downloads</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
+        <div style="font-size:11px;color:var(--text-subdued);margin-bottom:8px;line-height:1.4;">Missing playlist tracks are saved as Artist / Album / Song.</div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:8px;width:100%;align-items:center;">
+          <input type="text" id="setting-download-folder" class="meta-inp" readonly placeholder="Download folder" style="font-size:12px;">
+          <button class="btn btn-outline" id="btn-download-folder" style="width:auto;padding:8px 12px;border-radius:8px;white-space:nowrap;">Browse</button>
+        </div>
+        <label for="setting-download-quality" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;margin:10px 0 6px;">Download Quality</label>
+        <select id="setting-download-quality" class="meta-inp" style="width:100%;font-size:12px;">
+          <option value="best-native">Best Native — Recommended</option>
+          <option value="opus">Prefer Opus</option>
+          <option value="m4a">Prefer M4A / AAC</option>
+          <option value="mp3">MP3 Compatibility</option>
+        </select>
+        <div style="font-size:11px;color:var(--text-subdued);margin-top:6px;line-height:1.4;">Best Native keeps YouTube's selected audio container. MP3 Compatibility may transcode; a 320 kbps MP3 does not improve a lower-quality source.</div>
+        <label for="setting-ytdl-cookies-mode" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;margin:10px 0 6px;">YouTube Cookies</label>
+        <select id="setting-ytdl-cookies-mode" class="meta-inp" style="width:100%;font-size:12px;">
+          <option value="none">No cookies</option>
+          <option value="browser">Use browser cookies</option>
+          <option value="file">Use cookies.txt file</option>
+        </select>
+        <div id="setting-ytdl-cookies-browser-row" style="display:none;width:100%;margin-top:8px;">
+          <select id="setting-ytdl-cookies-browser" class="meta-inp" aria-label="Browser for YouTube cookies" style="width:100%;font-size:12px;">
+            <option value="firefox">Firefox</option>
+            <option value="chrome">Chrome</option>
+            <option value="chromium">Chromium</option>
+            <option value="brave">Brave</option>
+            <option value="edge">Edge</option>
+            <option value="vivaldi">Vivaldi</option>
+          </select>
+        </div>
+        <div id="setting-ytdl-cookies-file-row" style="display:none;grid-template-columns:1fr auto;gap:8px;width:100%;align-items:center;margin-top:8px;">
+          <input type="text" id="setting-ytdl-cookies-file" class="meta-inp" readonly aria-label="YouTube cookies file" placeholder="cookies.txt" style="font-size:12px;">
+          <button class="btn btn-outline" id="btn-ytdl-cookies-file" style="width:auto;padding:8px 12px;border-radius:8px;white-space:nowrap;">Browse</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-subdued);margin-top:6px;line-height:1.4;">Cookies are only used for downloads, so search stays fast. They help with age-restricted YouTube videos.</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;width:100%;">
+          <button class="btn btn-outline" id="btn-check-ytdlp" style="width:auto;padding:7px 11px;border-radius:8px;font-size:12px;">Check yt-dlp / ffmpeg</button>
+          <span id="ytdlp-status-text" style="font-size:11px;color:var(--text-subdued);"></span>
+        </div>
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section">
+        <summary>Metadata Sources</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
+        <label for="setting-discogs-token" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Discogs Personal Access Token</label>
+        <input type="password" id="setting-discogs-token" class="meta-inp" placeholder="Optional: enables Discogs Auto-Tag fallback" style="width:100%;font-size:12px;">
+        <label for="setting-spotify-client-id" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;margin:12px 0 6px;">Spotify Client ID</label>
+        <input type="password" id="setting-spotify-client-id" class="meta-inp" placeholder="Optional: enables Spotify Auto-Tag results" style="width:100%;font-size:12px;">
+        <label for="setting-spotify-client-secret" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;margin:10px 0 6px;">Spotify Client Secret</label>
+        <input type="password" id="setting-spotify-client-secret" class="meta-inp" placeholder="Optional: from Spotify Developer Dashboard" style="width:100%;font-size:12px;">
+        <div style="font-size:11px;color:var(--text-subdued);margin-top:6px;line-height:1.4;">MusicBrainz, iTunes and Deezer work without a token. Discogs and Spotify appear when credentials are saved.</div>
+        <div id="safe-storage-status" style="font-size:11px;color:var(--text-subdued);margin-top:8px;line-height:1.4;"></div>
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section">
+        <summary>Appearance</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:12px;">
+        <div>
+          <label for="setting-glass-effects">Panel Depth</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Disable layered panel depth for the lightest performance mode</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-glass-effects" checked />
+      </div>
+
+      <div class="setting-item" style="margin-bottom:12px;">
+        <div>
+          <label for="setting-native-titlebar">Native Title Bar</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Use the OS window frame instead of Playerinyo's custom bar. Requires restart.</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-native-titlebar" />
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section">
+        <summary>Notifications &amp; Integrations</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:12px;">
+        <div>
+          <label for="setting-notifications">Track Change Notifications</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Show desktop notification when song changes</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-notifications" checked />
+      </div>
+
+      <div class="setting-item" style="margin-bottom:16px;">
+        <div>
+          <label for="setting-discord-rpc">Discord Rich Presence</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;" id="discord-status-text">Disconnected</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-discord-rpc" />
+      </div>
+
+      <div class="setting-item" style="margin-bottom:16px;">
+        <div>
+          <label for="setting-minimize">Minimize to Tray</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Keep playback running from the system tray when the window is minimized.</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-minimize" />
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section">
+        <summary>Performance</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:12px;">
+        <div>
+          <label for="setting-virtual-scrolling">Virtual Scrolling</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Improves performance for large libraries</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-virtual-scrolling" />
+      </div>
+
+      <div class="setting-item" style="margin-bottom:16px;">
+        <div>
+          <label for="setting-lazy-loading">Lazy Loading Images</label>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Delays loading covers until visible</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-lazy-loading" />
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section">
+        <summary>Backup &amp; Restore</summary>
+        <div class="settings-section-body">
+      <div class="backup-automation">
+        <div class="setting-item backup-automation-toggle">
+          <div>
+            <label for="setting-automatic-backups">Daily automatic backups</label>
+            <div class="setting-help">Saved locally. The newest 7 daily backups are kept.</div>
+          </div>
+          <input type="checkbox" class="setting-switch" id="setting-automatic-backups" checked />
+        </div>
+        <div class="backup-status-summary" id="automatic-backup-summary">Checking backup status…</div>
+        <dl class="backup-status-list" id="automatic-backup-status" aria-live="polite" aria-atomic="true">
+          <div><dt>Last success</dt><dd id="automatic-backup-last-success">None yet</dd></div>
+          <div><dt>Last error</dt><dd id="automatic-backup-last-error">None</dd></div>
+        </dl>
+        <div class="backup-action-grid">
+          <button class="btn btn-primary" id="btn-backup-now">
+            <i class="ph ph-shield-check" aria-hidden="true"></i> Back Up Now
+          </button>
+          <button class="btn btn-outline" id="btn-open-backup-folder">
+            <i class="ph ph-folder-open" aria-hidden="true"></i> Open Backup Folder
+          </button>
+        </div>
+      </div>
+      <div class="backup-manual-actions">
+        <button class="btn btn-outline" id="btn-export-backup" style="justify-content:center;">
+          <i class="ph ph-download-simple"></i> Export Backup
+        </button>
+        <button class="btn btn-outline" id="btn-import-backup" style="justify-content:center;">
+          <i class="ph ph-upload-simple"></i> Import Backup
+        </button>
+      </div>
+        </div>
+      </details>
+
+      <details class="settings-section danger-zone" name="settings-section">
+        <summary>Danger Zone</summary>
+        <div class="settings-section-body">
+          <p>Clearing removes Playerinyo's local index. Audio files and playlists stay untouched, and you can undo the change during this session.</p>
+          <button class="btn btn-danger-subtle" id="clear-library-btn" style="justify-content:center;padding:8px;">
+            <i class="ph ph-trash" aria-hidden="true"></i> Clear Library
+          </button>
+        </div>
+      </details>
+      </div>
+      <button class="btn btn-primary" id="btn-close-settings" style="width:100%;justify-content:center;">Done</button>
+    </div>
+  </div>
+
+  <!-- Random Discovery Smart Mix Builder -->
+  <div id="smart-playlist-modal" class="modal-overlay" aria-labelledby="sp-builder-title">
+    <div class="modal-content smart-mix-builder">
+      <header class="smart-mix-builder-head">
+        <span class="smart-mix-builder-mark" aria-hidden="true"><i class="ph ph-sparkle"></i></span>
+        <div>
+          <h2 id="sp-builder-title">New Smart Mix</h2>
+          <p>Build a stable discovery reel from music already in your library.</p>
+        </div>
+      </header>
+
+      <label class="smart-mix-field" for="sp-name-input">
+        <span>Name</span>
+        <input type="text" id="sp-name-input" maxlength="120" placeholder="Random Discovery" autocomplete="off" />
+      </label>
+
+      <fieldset class="smart-mix-fieldset">
+        <legend>Genres <span>Optional</span></legend>
+        <div class="smart-mix-genre-toolbar">
+          <label class="smart-mix-all-genres"><input type="checkbox" id="sp-all-genres" checked /> <span>All genres</span></label>
+          <small id="sp-genre-summary">Uses every playable track</small>
+        </div>
+        <div class="smart-mix-genres" id="sp-genres-list"></div>
+        <p class="smart-mix-no-genres" id="sp-no-genres" hidden>No tagged genres are available. This mix will use all playable tracks.</p>
+      </fieldset>
+
+      <fieldset class="smart-mix-fieldset smart-mix-size-fieldset">
+        <legend>Target size</legend>
+        <label><input type="radio" name="sp-limit" value="50" checked /> <span><strong>50</strong> tracks</span></label>
+        <label><input type="radio" name="sp-limit" value="100" /> <span><strong>100</strong> tracks</span></label>
+      </fieldset>
+
+      <div class="smart-mix-album-rule">
+        <i class="ph ph-vinyl-record" aria-hidden="true"></i>
+        <span><strong>Album balance is fixed.</strong> Up to 5 tracks are selected from any one album.</span>
+      </div>
+
+      <div class="smart-mix-preview" id="sp-preview-count" role="status" aria-live="polite">
+        <strong id="sp-preview-num">0</strong>
+        <span id="sp-preview-copy">tracks available for this mix</span>
+      </div>
+      <p class="smart-mix-builder-error" id="sp-builder-error" role="alert" hidden></p>
+
+      <div class="smart-mix-builder-actions">
+        <button class="btn btn-outline" id="sp-cancel-btn">Cancel</button>
+        <button class="btn btn-primary" id="sp-create-btn"><i class="ph ph-plus" aria-hidden="true"></i> Create Mix</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Playlist Modal -->
+  <div id="create-playlist-modal" class="modal-overlay">
+    <div class="modal-content" style="width:420px;">
+      <h2 style="margin-top:0;margin-bottom:20px;">Create Playlist</h2>
+      <div id="cp-cover-drop" class="cover-drop-zone" role="button" tabindex="0" aria-label="Choose playlist cover image">
+        <i class="ph ph-image" style="font-size:40px;color:var(--text-subdued);"></i>
+        <p style="margin:8px 0 0;color:var(--text-subdued);font-size:13px;">Drag & drop cover or click to browse</p>
+        <img id="cp-cover-preview" src="../assets/icon.png" alt="" style="display:none;width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;border-radius:6px;" />
+      </div>
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px;color:var(--text-subdued);display:block;margin-bottom:6px;">PLAYLIST NAME</label>
+        <input type="text" id="cp-name-input" placeholder="My Playlist"
+          style="width:100%;padding:10px 12px;border-radius:6px;border:none;background:#333;color:white;font-size:14px;box-sizing:border-box;" />
+      </div>
+      <div style="margin-bottom:24px;">
+        <label style="font-size:12px;color:var(--text-subdued);display:block;margin-bottom:8px;">COLOR THEME</label>
+        <div id="cp-color-picker" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+      </div>
+      <div style="display:flex;gap:12px;">
+        <button class="btn btn-outline" id="cp-cancel-btn" style="flex:1;justify-content:center;">Cancel</button>
+        <button class="btn btn-primary" id="cp-create-btn" style="flex:1;justify-content:center;">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Album Context Menu -->
+  <div id="album-context-menu" class="context-menu" role="menu" aria-label="Album actions">
+    <button type="button" class="menu-item has-submenu" id="actx-add-playlist" role="menuitem" aria-haspopup="dialog" aria-controls="add-to-playlist-menu" aria-expanded="false">
+      <span class="menu-item-label"><i class="ph ph-list-plus"></i> Add to Playlist…</span>
+      <i class="ph ph-caret-right submenu-caret"></i>
+    </button>
+    <button type="button" class="menu-item is-accent" id="actx-download-album" role="menuitem"><i class="ph ph-download-simple"></i> Download Album…</button>
+    <button type="button" class="menu-item" id="actx-play-next" role="menuitem"><i class="ph ph-skip-forward"></i> Play Next</button>
+    <button type="button" class="menu-item" id="actx-add-queue" role="menuitem"><i class="ph ph-queue"></i> Add to Queue</button>
+    <button type="button" class="menu-item" id="actx-edit-metadata" role="menuitem"><i class="ph ph-pencil-simple"></i> Edit Album Metadata</button>
+    <button type="button" class="menu-item" id="actx-analyze-loudness" role="menuitem"><i class="ph ph-waveform"></i> Analyze Loudness</button>
+    <button type="button" class="menu-item" id="actx-split-disc" role="menuitem"><i class="ph ph-vinyl-record"></i> Split by Disc</button>
+    <button type="button" class="menu-item" id="actx-open-folder" role="menuitem"><i class="ph ph-folder-open"></i> Open File Location</button>
+    <div class="menu-separator" role="separator"></div>
+    <button type="button" class="menu-item is-danger" id="actx-remove-library" role="menuitem"><i class="ph ph-trash"></i> Remove Album from Library</button>
+  </div>
+
+  <!-- Track Context Menu -->
+  <div id="track-context-menu" class="context-menu" role="menu" aria-label="Track actions">
+    <button type="button" class="menu-item has-submenu" id="ctx-add-playlist" role="menuitem" aria-haspopup="dialog" aria-controls="add-to-playlist-menu" aria-expanded="false">
+      <span class="menu-item-label"><i class="ph ph-list-plus"></i> Add to Playlist…</span>
+      <i class="ph ph-caret-right submenu-caret"></i>
+    </button>
+    <button type="button" class="menu-item" id="ctx-add-playlist-download" role="menuitem" hidden><i class="ph ph-playlist-plus"></i> Add to Playlist &amp; Download</button>
+    <button type="button" class="menu-item" id="ctx-play-next" role="menuitem"><i class="ph ph-skip-forward"></i> Play Next</button>
+    <button type="button" class="menu-item" id="ctx-add-queue" role="menuitem"><i class="ph ph-queue"></i> Add to Queue</button>
+    <button type="button" class="menu-item" id="ctx-go-to-album" role="menuitem"><i class="ph ph-vinyl-record"></i> Go to Album</button>
+    <button type="button" class="menu-item" id="ctx-edit-metadata" role="menuitem"><i class="ph ph-pencil-simple"></i> Edit Metadata</button>
+    <button type="button" class="menu-item" id="ctx-analyze-loudness" role="menuitem"><i class="ph ph-waveform"></i> Analyze Loudness</button>
+    <button type="button" class="menu-item" id="ctx-open-folder" role="menuitem"><i class="ph ph-folder-open"></i> Open File Location</button>
+    <button type="button" class="menu-item is-accent" id="ctx-download-track" role="menuitem" hidden><i class="ph ph-download-simple"></i> Download Track…</button>
+    <button type="button" class="menu-item is-accent" id="ctx-manual-match" role="menuitem"><i class="ph ph-link"></i> Manual Match…</button>
+    <button type="button" class="menu-item is-warning" id="ctx-remove-match" role="menuitem" hidden><i class="ph ph-link-break"></i> Remove Match</button>
+    <div class="menu-separator" role="separator"></div>
+    <button type="button" class="menu-item is-danger" id="ctx-remove-playlist" role="menuitem"><i class="ph ph-minus-circle"></i> Remove from Playlist</button>
+  </div>
+
+  <!-- Playlist Context Menu -->
+  <div id="playlist-context-menu" class="context-menu" role="menu" aria-label="Playlist actions">
+    <button type="button" class="menu-item is-accent" id="pctx-add-songs" role="menuitem">Add Songs…</button>
+    <button type="button" class="menu-item is-accent" id="pctx-download-missing" role="menuitem" hidden>Download Missing Tracks…</button>
+    <button type="button" class="menu-item" id="pctx-rename" role="menuitem">Rename</button>
+    <button type="button" class="menu-item" id="pctx-cover" role="menuitem">Change Cover</button>
+    <button type="button" class="menu-item" id="pctx-color" role="menuitem">Change Color</button>
+    <button type="button" class="menu-item" id="pctx-pin" role="menuitem">Pin Playlist</button>
+    <button type="button" class="menu-item" id="pctx-sync-albums" role="menuitem">Sync Albums with Library</button>
+    <button type="button" class="menu-item is-accent" id="pctx-match-folder" role="menuitem">Match from Folder…</button>
+    <button type="button" class="menu-item" id="pctx-duplicate" role="menuitem">Duplicate</button>
+    <button type="button" class="menu-item" id="pctx-export-csv" role="menuitem">Export CSV</button>
+    <button type="button" class="menu-item" id="pctx-export-m3u" role="menuitem">Export M3U</button>
+    <button type="button" class="menu-item" id="pctx-export-m3u8" role="menuitem">Export M3U8</button>
+    <div class="menu-separator" role="separator"></div>
+    <button type="button" class="menu-item is-danger" id="pctx-delete" role="menuitem">Delete Playlist</button>
+  </div>
+
+  <!-- Playlist Selector (Add to Playlist) -->
+  <div id="manual-lyrics-modal" class="modal-overlay">
+    <div class="modal-content" style="width:380px;">
+      <h3 style="margin-top:0;margin-bottom:14px;">Manual Lyrics Search</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px;">
+        <div>
+          <label class="meta-lbl">Artist</label>
+          <input type="text" id="manual-lyrics-artist" class="meta-inp" />
+        </div>
+        <div>
+          <label class="meta-lbl">Title</label>
+          <input type="text" id="manual-lyrics-title" class="meta-inp" />
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-outline" id="manual-lyrics-cancel" style="flex:1;justify-content:center;">Cancel</button>
+        <button class="btn btn-primary" id="manual-lyrics-search" style="flex:1;justify-content:center;">Search</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlist-selector-modal" class="modal-overlay">
+    <div class="modal-content" style="width:440px;max-width:calc(100vw - 32px);">
+      <h3 style="margin-top:0;margin-bottom:6px;">Add to Playlist</h3>
+      <div id="playlist-selector-subtitle" style="font-size:12px;color:var(--text-subdued);margin-bottom:14px;"></div>
+      <div id="playlist-selector-list" style="max-height:360px;overflow-y:auto;margin-bottom:16px;"></div>
+      <button class="btn btn-outline" id="btn-close-playlist-selector" style="width:100%;justify-content:center;">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Color Picker Modal (for playlist right-click color change) -->
+  <div id="color-picker-modal" class="modal-overlay">
+    <div class="modal-content" style="width:280px;">
+      <h3 style="margin-top:0;margin-bottom:16px;">Choose Color</h3>
+      <div id="color-picker-swatches" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;"></div>
+      <button class="btn btn-outline" id="btn-close-color-picker" style="width:100%;justify-content:center;">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Add Songs Modal -->
+  <div id="add-songs-modal" class="modal-overlay">
+    <div class="modal-content" style="width:500px; max-height:80vh; display:flex; flex-direction:column;">
+      <h3 style="margin-top:0;margin-bottom:16px;">Add Songs to <span id="add-songs-playlist-name" style="color:var(--accent);"></span></h3>
+      <div class="search-bar" style="position:relative; margin-bottom:16px;">
+        <i class="ph ph-magnifying-glass" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-subdued);pointer-events:none;"></i>
+        <input type="text" id="add-songs-search" placeholder="Search for songs..."
+          style="width:100%;padding:10px 16px 10px 36px;border-radius:16px;border:1px solid var(--border);background:#242424;color:white;font-size:14px;" />
+      </div>
+      <div id="add-songs-results" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; min-height:300px; max-height:400px;"></div>
+      <button class="btn btn-outline" id="btn-close-add-songs" style="margin-top:16px;width:100%;justify-content:center;">Done</button>
+    </div>
+  </div>
+
+  <!-- Track Playlists Menu -->
+  <div id="track-playlists-menu" class="context-menu" role="menu" aria-label="Playlists containing this track" style="max-width: 250px; padding: 8px;">
+    <div style="font-size:11px;font-weight:700;color:var(--text-subdued);margin-bottom:8px;padding-left:8px;text-transform:uppercase;">In Playlists</div>
+    <div id="track-playlists-list" style="max-height: 200px; overflow-y: auto;"></div>
+  </div>
+
+  <!-- Add to Playlist Flyout -->
+  <div id="add-to-playlist-menu" class="context-menu playlist-flyout-menu" role="dialog" aria-label="Add to playlist">
+    <label class="playlist-flyout-search">
+      <i class="ph ph-magnifying-glass"></i>
+      <input type="text" id="add-to-playlist-search" placeholder="Find a playlist" autocomplete="off" />
+    </label>
+    <button type="button" class="playlist-flyout-action" id="add-to-playlist-new">
+      <i class="ph ph-plus"></i>
+      <span>New playlist</span>
+    </button>
+    <div class="menu-separator"></div>
+    <div class="playlist-flyout-section-title">Playlists</div>
+    <div id="add-to-playlist-list" class="playlist-flyout-list"></div>
+  </div>
+
+  <!-- Delete Confirm Modal -->
+  <div id="delete-confirm-modal" class="modal-overlay">
+    <div class="modal-content" style="width:320px;">
+      <h3 id="delete-confirm-title" style="margin-top:0;margin-bottom:12px;">Delete Playlist</h3>
+      <p id="delete-confirm-copy" style="color:var(--text-subdued);margin-bottom:24px;">The playlist will be removed from Playerinyo. Library tracks and audio files stay untouched, and you can undo this action during the current session.</p>
+      <div style="display:flex;gap:12px;">
+        <button class="btn btn-outline" id="delete-cancel-btn" style="flex:1;justify-content:center;">Cancel</button>
+        <button class="btn btn-danger" id="delete-confirm-btn" style="flex:1;justify-content:center;">Delete Playlist</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metadata Editor Modal -->
+  <div id="metadata-modal" class="modal-overlay">
+    <div class="modal-content metadata-modal-content" style="width:calc(100vw - 72px);max-width:1320px;max-height:92vh;overflow-y:auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin:0;" id="meta-modal-title">Edit Metadata</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline" id="meta-cancel-btn" style="width:90px;padding:6px 12px;">Cancel</button>
+          <button class="btn btn-primary" id="meta-save-btn" style="width:90px;padding:6px 12px;">Save</button>
+        </div>
+      </div>
+      
+      <div role="tablist" aria-label="Metadata editor mode" style="display:flex;gap:16px;border-bottom:1px solid var(--border);margin-bottom:16px;">
+        <button type="button" role="tab" aria-selected="true" aria-controls="meta-panel-manual" id="meta-tab-manual" class="meta-tab active" style="padding:8px 0;cursor:pointer;color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600;font-size:14px;">Manual Edit</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="meta-panel-auto" id="meta-tab-auto" class="meta-tab" style="padding:8px 0;cursor:pointer;color:var(--text-subdued);border-bottom:2px solid transparent;font-size:14px;">Auto-Tag</button>
+      </div>
+
+      <!-- Manual Edit Panel -->
+      <div id="meta-panel-manual" role="tabpanel" aria-labelledby="meta-tab-manual" style="display:flex;gap:24px;">
+        <div style="width:200px;">
+          <div id="meta-cover-drop" class="cover-drop-zone" style="height:200px;" role="button" tabindex="0" aria-label="Choose album cover image">
+            <i class="ph ph-image" style="font-size:40px;color:var(--text-subdued);"></i>
+            <p style="margin:8px 0 0;color:var(--text-subdued);font-size:12px;text-align:center;">Click to Change Cover</p>
+          <img id="meta-cover-preview" src="../assets/icon.png" alt="" style="display:none;width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;border-radius:6px;" />
+          </div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="meta-save-folder-jpg" checked>
+            <label for="meta-save-folder-jpg" style="font-size:11px;color:var(--text-subdued);">Save as folder.jpg</label>
+          </div>
+          <button class="btn btn-outline" id="meta-search-cover-btn" style="width:100%;margin-top:8px;justify-content:center;font-size:12px;padding:6px;"><i class="ph ph-magnifying-glass"></i> Find Covers</button>
+        </div>
+        <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div style="grid-column:1 / -1;"><label class="meta-lbl">Title</label><input type="text" id="meta-title" class="meta-inp"></div>
+          <div><label class="meta-lbl">Artist</label><input type="text" id="meta-artist" class="meta-inp"></div>
+          <div><label class="meta-lbl">Album Artist</label><input type="text" id="meta-album-artist" class="meta-inp"></div>
+          <div style="grid-column:1 / -1;"><label class="meta-lbl">Album</label><input type="text" id="meta-album" class="meta-inp"></div>
+          <div><label class="meta-lbl">Year</label><input type="text" id="meta-year" class="meta-inp"></div>
+          <div><label class="meta-lbl">Genre</label><input type="text" id="meta-genre" class="meta-inp"></div>
+          <div><label class="meta-lbl">Track No</label><input type="number" min="0" id="meta-track-no" class="meta-inp"></div>
+          <div><label class="meta-lbl">Track Total</label><input type="number" min="0" id="meta-track-total" class="meta-inp"></div>
+          <div><label class="meta-lbl">Disc No</label><input type="number" min="0" id="meta-disc-no" class="meta-inp"></div>
+          <div><label class="meta-lbl">Disc Total</label><input type="number" min="0" id="meta-disc-total" class="meta-inp"></div>
+          <div id="meta-track-order-wrap" style="grid-column:1 / -1;display:none;margin-top:4px;min-height:0;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+              <label class="meta-lbl" style="margin:0;">Track Order</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-subdued);"><input type="checkbox" id="meta-save-track-order" style="accent-color:var(--accent);"> Save this order as track numbers</label>
+            </div>
+            <div id="meta-track-order-list" style="max-height:190px;overflow-y:auto;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);padding:6px;"></div>
+            <div style="font-size:11px;color:var(--text-subdued);margin-top:6px;">Drag tracks or use Alt+Up/Down before Auto-Tag if your local order differs from the selected release.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Auto-Tag Panel -->
+      <div id="meta-panel-auto" role="tabpanel" aria-labelledby="meta-tab-auto" style="display:none;flex-direction:column;gap:0;">
+
+        <!-- Search bar -->
+        <div class="at-topbar">
+          <input type="text" id="meta-search-query" class="meta-inp" style="flex:1;" placeholder="e.g. Artist Album name">
+          <button class="btn btn-outline" id="meta-search-btn" style="width:auto;padding:8px 16px;white-space:nowrap;"><i class="ph ph-magnifying-glass"></i> Search Metadata</button>
+          <button class="btn btn-outline" id="at-order-toggle" style="display:none;width:auto;padding:8px 12px;white-space:nowrap;"><i class="ph ph-list-numbers"></i> Track Order</button>
+        </div>
+
+        <div id="at-track-order-wrap" class="at-order-popover" style="display:none;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:rgba(255,255,255,.45);">Local Track Order</div>
+              <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Use this only if local files do not line up with the selected release. Alt+Up/Down also reorders the focused track.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+              <button class="btn btn-outline" id="at-order-filename" style="width:auto;padding:5px 9px;font-size:11px;">Sort by filename</button>
+              <button class="btn btn-outline" id="at-order-trackno" style="width:auto;padding:5px 9px;font-size:11px;">Sort by current #</button>
+              <button class="btn btn-outline" id="at-order-match-title" style="width:auto;padding:5px 9px;font-size:11px;color:var(--accent);">Match by title</button>
+              <button class="btn btn-outline" id="at-order-reset" style="width:auto;padding:5px 9px;font-size:11px;">Reset</button>
+              <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-subdued);"><input type="checkbox" id="at-save-track-order" style="accent-color:var(--accent);"> Save order as track #</label>
+            </div>
+          </div>
+          <div id="at-track-order-list" style="max-height:140px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;"></div>
+        </div>
+
+        <div class="at-stages">
+          <details id="at-step-release" class="at-step" name="auto-tag-step" open>
+            <summary>1. Choose Release</summary>
+            <div class="at-step-body">
+              <div id="meta-search-results" class="at-results"></div>
+            </div>
+          </details>
+
+          <details id="at-step-fields" class="at-step" name="auto-tag-step">
+            <summary>2. Fields to Write</summary>
+            <div class="at-step-body at-fields">
+              <!-- Cover preview — compact -->
+              <div id="at-cover-wrap" style="width:100%;aspect-ratio:1;max-height:140px;background:#1a1a1a;border-radius:8px;margin-bottom:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;">
+                <i class="ph ph-image" style="font-size:28px;color:rgba(255,255,255,0.2);"></i>
+                <img id="at-cover-preview" src="../assets/icon.png" alt="" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;">
+              </div>
+              <!-- Checkboxes -->
+              <div style="display:flex;flex-direction:column;gap:5px;">
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-artist" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Track Artist</span> <span id="at-val-artist" style="margin-left:auto;color:var(--accent);font-size:11px;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-album-artist" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Album Artist</span> <span id="at-val-album-artist" style="margin-left:auto;color:var(--accent);font-size:11px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-album" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Album</span> <span id="at-val-album" style="margin-left:auto;color:var(--accent);font-size:11px;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-year" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Year</span> <span id="at-val-year" style="margin-left:auto;color:var(--accent);font-size:11px;"></span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-genre" style="accent-color:var(--accent);flex-shrink:0;"> <span>Genre</span> <span id="at-val-genre" style="margin-left:auto;color:var(--accent);font-size:11px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-cover" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Cover</span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-track-titles" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Track Titles</span></label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.04);"><input type="checkbox" id="at-chk-track-numbers" checked style="accent-color:var(--accent);flex-shrink:0;"> <span>Track Nos.</span></label>
+              </div>
+              <button type="button" class="btn btn-primary at-step-continue" id="at-fields-continue" disabled>Review changes</button>
+            </div>
+          </details>
+
+          <details id="at-step-review" class="at-step" name="auto-tag-step">
+            <summary>3. Review Changes <span id="at-track-count"></span></summary>
+            <div class="at-step-body">
+            <div style="display:flex;justify-content:flex-end;margin:0 0 10px;">
+              <button type="button" class="btn btn-outline" id="at-download-missing-btn" disabled style="width:auto;padding:7px 11px;"><i class="ph ph-download-simple" aria-hidden="true"></i> Review missing tracks</button>
+            </div>
+            <div id="at-track-table" class="at-review-table">
+              <div id="at-track-empty" style="padding:40px;text-align:center;color:rgba(255,255,255,0.2);font-size:13px;">Select a result to see track matching</div>
+            </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+
+
+    </div>
+  </div>
+
+  <!-- Last.fm Auth Modal -->
+  <div id="lastfm-modal" class="modal-overlay">
+    <div class="modal-content" style="width:400px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <i class="ph-fill ph-lastfm-logo" style="font-size:64px;color:var(--text-base);margin-bottom:12px;"></i>
+        <h2 style="margin:0;">Connect Last.fm</h2>
+        <p style="color:var(--text-subdued);font-size:13px;margin-top:8px;line-height:1.4;">
+          Personalize your experience with scrobbling and recommendations.
+        </p>
+      </div>
+
+      <div id="lastfm-api-inputs" style="margin-bottom:20px;">
+        <div style="margin-bottom:12px;">
+          <label for="lastfm-api-key" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;">Last.fm API Key</label>
+          <input type="password" id="lastfm-api-key" placeholder="Enter API Key" class="meta-inp" autocomplete="off">
+        </div>
+        <div>
+          <label for="lastfm-shared-secret" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;">Shared Secret</label>
+          <input type="password" id="lastfm-shared-secret" placeholder="Enter Shared Secret" class="meta-inp" autocomplete="off">
+        </div>
+        <p style="font-size:10px;color:var(--text-disabled);margin-top:8px;">
+          Don't have these? <button type="button" class="text-link" id="lastfm-api-link">Create Last.fm API credentials</button>
+        </p>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button class="btn btn-primary" id="btn-lastfm-open-browser" style="justify-content:center;">
+          <i class="ph ph-browser"></i> 1. Open Browser to Authorize
+        </button>
+        <button class="btn btn-outline" id="btn-lastfm-confirm" style="justify-content:center;" disabled>
+          <i class="ph ph-check-circle"></i> 2. I have authorized
+        </button>
+        <button class="btn ghost" id="btn-lastfm-cancel" style="justify-content:center;color:var(--text-subdued);">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-toast" class="app-toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+  <div id="artwork-lightbox-modal" class="modal-overlay artwork-lightbox-modal" role="dialog" aria-modal="true" aria-label="Artwork preview">
+    <div class="artwork-lightbox-dialog" role="document" tabindex="-1">
+      <img id="artwork-lightbox-image" src="../assets/icon.png" alt="" />
+    </div>
+  </div>
+  <audio id="audio-player-0"></audio>
+  <audio id="audio-player-1"></audio>
+  <script src="radio-providers.js"></script>
+  <script src="radio-preferences.js"></script>
+  <script src="radio-discovery-bias.js"></script>
+  <script src="listening-stats-sources.js"></script>
+  <script src="radio-queue-helpers.js"></script>
+  <script src="radio-startup-flow.js"></script>
+  <script src="radio-resolver-ownership.js"></script>
+  <script src="radio-local-bootstrap.js"></script>
+  <script src="scan-root-filter.js"></script>
+  <script src="local-track-matcher.js"></script>
+  <script src="youtube-track-matcher.js"></script>
+  <script src="playback-resolver.js"></script>
+  <script src="playback-local-upgrade.js"></script>
+  <script src="remote-preparation-coordinator.js"></script>
+  <script src="lyrics-cache.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

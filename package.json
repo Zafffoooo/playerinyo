@@ -11,7 +11,7 @@
   "productName": "Playerinyo",
   "version": "1.0.0",
   "description": "Offline music player",
-  "main": "main.js",
+  "main": "app/main.js",
   "scripts": {
     "test": "node --test",
     "package": "node scripts/package.js",

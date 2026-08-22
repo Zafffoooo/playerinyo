@@ -9,10 +9,10 @@ const packagerConfig = {
   prune: true,
   // Electron Packager matches these regexes against app-relative paths beginning with "/".
   ignore: [
-    /^\/(?:\.impeccable|build|out|dist)(?:\/|$)/,
+    /^\/(?:build|docs|out|dist|test)(?:\/|$)/,
     /^\/\.git(?:\/|$)/,
     /^\/\.git(?:ignore|attributes|modules)$/,
-    /^\/(?:AGENTS|PRODUCT|DESIGN|LINUX_LOCAL_INSTALL|allah|playleirnyo)\.md$/,
+    /^\/(?:AGENTS|allah|playleirnyo)\.md$/,
     /^\/forge\.config\.js$/,
     /^\/session(?:[-_.]|$)/i,
     /^\/[^/]+\.csv$/i,
