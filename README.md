@@ -1,6 +1,6 @@
 # Playerinyo
 
-Yerel müzik arşivleri için Electron tabanlı masaüstü oynatıcı.
+Yerel müzik arşivleri için Electron tabanlı vibecoded masaüstü oynatıcı.
 
 ## Başlatma
 
