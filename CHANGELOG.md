@@ -2,6 +2,18 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.3 — 2026-08-23
+
+### Added
+
+- Added album download entry point and an accessible library sort picker.
+
+### Fixed
+
+- Metadata fields can now be cleared reliably in FLAC, Ogg, and Opus files.
+- Downloads reuse matching artist and album directories without creating duplicate folders.
+- Fixed playlist detail search layout and restored F12 DevTools toggling without opening DevTools at launch.
+
 ## 0.1.2 — 2026-08-22
 
 ### Fixed

@@ -1205,6 +1205,11 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', preventUntrustedNavigation);
   mainWindow.webContents.on('will-frame-navigate', preventUntrustedNavigation);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.isAutoRepeat || input.key !== 'F12') return;
+    event.preventDefault();
+    mainWindow.webContents.toggleDevTools();
+  });
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     callback(webContents === mainWindow.webContents && permission === 'notifications');
   });
@@ -1824,7 +1829,9 @@ registerIpcHandler('download-playlist-track', async (event, track, downloadRoot,
         extension = '.opus';
       }
     }
-    let targetPath = await ensureUniquePath(buildDownloadTargetPath(canonicalTrack, root, extension), reservedDownloadPaths);
+    const targetFilename = path.basename(buildDownloadTargetPath(canonicalTrack, root, extension));
+    const canonicalAlbumDir = await resolveCanonicalDownloadAlbumDirectory(canonicalTrack, root);
+    let targetPath = await ensureUniquePath(path.join(canonicalAlbumDir, targetFilename), reservedDownloadPaths);
     reservedDownloadPaths.add(targetPath); reservedHere.push(targetPath);
     const albumDir = path.dirname(targetPath);
     let albumDirWasMissing = false;
@@ -3048,6 +3055,40 @@ function buildDownloadTargetPath(track, rootFolder, extension) {
   return path.join(root, artistFolder, albumFolder, `${prefix}${title}${ext}`);
 }
 
+function normalizeDownloadDirectoryLabel(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/[\u2018\u2019\u201b\u02bc`]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+async function findUniqueNormalizedDownloadDirectory(parentDir, desiredName) {
+  const desiredKey = normalizeDownloadDirectoryLabel(desiredName);
+  if (!desiredKey) return null;
+  let entries = [];
+  try { entries = await fs.promises.readdir(parentDir, { withFileTypes: true }); }
+  catch (_) { return null; }
+  const matches = entries.filter((entry) => entry.isDirectory() && normalizeDownloadDirectoryLabel(entry.name) === desiredKey);
+  // Never guess between two lookalike folders. The exact desired name is used
+  // in that case, which keeps the download isolated rather than misfiling it.
+  return matches.length === 1 ? matches[0].name : null;
+}
+
+async function resolveCanonicalDownloadAlbumDirectory(track, rootFolder) {
+  const meta = normalizeImportTrackMeta(track);
+  const root = normalizePathInput(rootFolder) || getDefaultDownloadFolder();
+  if (!path.isAbsolute(root)) throw new Error('Download folder must be an absolute path');
+  const desiredArtist = sanitizePathSegment(meta.albumArtist || meta.artist, 'Unknown Artist');
+  const desiredAlbum = sanitizePathSegment(meta.album || 'Singles', 'Singles');
+  const existingArtist = await findUniqueNormalizedDownloadDirectory(root, desiredArtist);
+  const artistDir = path.join(root, existingArtist || desiredArtist);
+  const existingAlbum = await findUniqueNormalizedDownloadDirectory(artistDir, desiredAlbum);
+  return path.join(artistDir, existingAlbum || desiredAlbum);
+}
+
 // Paths picked as download targets but not created on disk yet; keeps two
 // concurrent downloads of the same track from resolving to the same file.
 const reservedDownloadPaths = new Set();
@@ -3420,6 +3461,17 @@ function ffmpegMetadataArgs(tags) {
   return args;
 }
 
+function ffmpegClearMetadataArgs(tags) {
+  const values = [
+    ['title', tags.title], ['artist', tags.artist], ['album', tags.album],
+    ['album_artist', tags.performerInfo], ['date', tags.year], ['genre', tags.genre],
+    ['track', tags.trackNumber], ['disc', tags.discNumber], ['musicbrainz_trackid', tags.trackMbid]
+  ];
+  const args = [];
+  values.forEach(([key, value]) => { if (value === '') args.push('-metadata', `${key}=`); });
+  return args;
+}
+
 function ffmpegVorbisMetadataArgs(metadata, replacementTags) {
   const nativeTags = metadata && metadata.native && Array.isArray(metadata.native.vorbis) ? metadata.native.vorbis : [];
   const replacedNames = new Set();
@@ -3473,7 +3525,7 @@ async function updateStreamCopyMetadata(filePath, tags) {
     const sourceMetadata = isVorbisContainer ? await mm.parseFile(filePath, { duration: false, skipCovers: true }) : null;
     const metadataArgs = isVorbisContainer ? ffmpegVorbisMetadataArgs(sourceMetadata, tags) : [];
     const mapMetadataArgs = isVorbisContainer ? ['-map_metadata', '-1'] : ['-map_metadata', '0'];
-    const result = await runProcess('ffmpeg', ['-y', '-i', filePath, '-map', '0', ...mapMetadataArgs, '-c', 'copy', ...metadataArgs, ...ffmpegMetadataArgs(tags), tmpPath], { timeoutMs: 60 * 1000 });
+    const result = await runProcess('ffmpeg', ['-y', '-i', filePath, '-map', '0', ...mapMetadataArgs, '-c', 'copy', ...metadataArgs, ...ffmpegMetadataArgs(tags), ...ffmpegClearMetadataArgs(tags), tmpPath], { timeoutMs: 60 * 1000 });
     if (!result.ok) throw new Error(formatYtdlpError(result.stderr || result.stdout, 'Could not write native metadata without re-encoding.'));
     const stat = await fs.promises.lstat(tmpPath);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_METADATA_EDIT_BYTES) throw new Error('Edited native audio is invalid.');
@@ -4617,9 +4669,10 @@ registerIpcHandler('get-metadata', async (event, filePath) => {
 });
 
 function setFlacTag(flac, name, value) {
-  if (value === null || value === undefined || value === '') return;
+  if (value === null || value === undefined) return;
   const upper = name.toUpperCase();
   flac.tags = flac.tags.filter(item => item.split('=')[0].toUpperCase() !== upper);
+  if (value === '') return;
   flac.tags.push(`${upper}=${String(value)}`);
 }
 
@@ -4712,17 +4765,17 @@ async function updateFlacMetadata(filePath, tags) {
   let vorbisIndex = blocks.findIndex(block => block.type === 4);
   let parsed = vorbisIndex >= 0 ? parseVorbisComment(blocks[vorbisIndex].data) : { vendor: APP_ID, tags: [] };
   const flac = { tags: parsed.tags };
-  if (tags.title) setFlacTag(flac, 'TITLE', tags.title);
-  if (tags.artist) setFlacTag(flac, 'ARTIST', tags.artist);
-  if (tags.album) setFlacTag(flac, 'ALBUM', tags.album);
-  if (tags.performerInfo) setFlacTag(flac, 'ALBUMARTIST', tags.performerInfo);
-  if (tags.year) setFlacTag(flac, 'DATE', tags.year);
-  if (tags.genre) setFlacTag(flac, 'GENRE', tags.genre);
-  if (tags.trackNumber) setFlacTag(flac, 'TRACKNUMBER', tags.trackNumber);
-  if (tags.trackTotal) setFlacTag(flac, 'TOTALTRACKS', tags.trackTotal);
-  if (tags.discNumber) setFlacTag(flac, 'DISCNUMBER', tags.discNumber);
-  if (tags.discTotal) setFlacTag(flac, 'TOTALDISCS', tags.discTotal);
-  if (tags.partOfSet) {
+  if (Object.prototype.hasOwnProperty.call(tags, 'title')) setFlacTag(flac, 'TITLE', tags.title);
+  if (Object.prototype.hasOwnProperty.call(tags, 'artist')) setFlacTag(flac, 'ARTIST', tags.artist);
+  if (Object.prototype.hasOwnProperty.call(tags, 'album')) setFlacTag(flac, 'ALBUM', tags.album);
+  if (Object.prototype.hasOwnProperty.call(tags, 'performerInfo')) setFlacTag(flac, 'ALBUMARTIST', tags.performerInfo);
+  if (Object.prototype.hasOwnProperty.call(tags, 'year')) setFlacTag(flac, 'DATE', tags.year);
+  if (Object.prototype.hasOwnProperty.call(tags, 'genre')) setFlacTag(flac, 'GENRE', tags.genre);
+  if (Object.prototype.hasOwnProperty.call(tags, 'trackNumber')) setFlacTag(flac, 'TRACKNUMBER', tags.trackNumber);
+  if (Object.prototype.hasOwnProperty.call(tags, 'trackTotal')) setFlacTag(flac, 'TOTALTRACKS', tags.trackTotal);
+  if (Object.prototype.hasOwnProperty.call(tags, 'discNumber')) setFlacTag(flac, 'DISCNUMBER', tags.discNumber);
+  if (Object.prototype.hasOwnProperty.call(tags, 'discTotal')) setFlacTag(flac, 'TOTALDISCS', tags.discTotal);
+  if (Object.prototype.hasOwnProperty.call(tags, 'partOfSet') && tags.partOfSet) {
     setFlacTag(flac, 'DISCNUMBER', tags.partOfSet);
     const parts = String(tags.partOfSet).split('/');
     if (parts[1]) setFlacTag(flac, 'TOTALDISCS', parts[1]);
@@ -4801,8 +4854,14 @@ async function mergeCompositeMetadataNumbers(filePath, tags) {
   const trackTouched = Object.prototype.hasOwnProperty.call(next, 'trackNumber') || Object.prototype.hasOwnProperty.call(next, 'trackTotal');
   const discTouched = Object.prototype.hasOwnProperty.call(next, 'discNumber') || Object.prototype.hasOwnProperty.call(next, 'discTotal') || Object.prototype.hasOwnProperty.call(next, 'partOfSet');
   if (!trackTouched && !discTouched) return next;
+  // An empty value is an intentional removal. Do not repopulate it from the
+  // current combined track/disc value while normalizing the other field.
+  const clearsTrack = next.trackNumber === '' || next.trackTotal === '';
+  const clearsDisc = next.discNumber === '' || next.discTotal === '' || next.partOfSet === '';
+  if (clearsTrack && !discTouched) return next;
+  if (clearsDisc && !trackTouched) return next;
   const metadata = await mm.parseFile(filePath, { duration: false, skipCovers: true });
-  if (trackTouched) {
+  if (trackTouched && !clearsTrack) {
     const incoming = parseMetadataNumberPair(next.trackNumber);
     const currentNo = metadata.common.track && metadata.common.track.no ? metadata.common.track.no : 0;
     const currentTotal = metadata.common.track && metadata.common.track.of ? metadata.common.track.of : 0;
@@ -4811,7 +4870,7 @@ async function mergeCompositeMetadataNumbers(filePath, tags) {
     if (finalNo) next.trackNumber = finalTotal ? `${finalNo}/${finalTotal}` : String(finalNo);
     if (finalTotal) next.trackTotal = String(finalTotal);
   }
-  if (discTouched) {
+  if (discTouched && !clearsDisc) {
     const incoming = parseMetadataNumberPair(next.partOfSet || next.discNumber);
     const currentNo = metadata.common.disk && metadata.common.disk.no ? metadata.common.disk.no : 0;
     const currentTotal = metadata.common.disk && metadata.common.disk.of ? metadata.common.disk.of : 0;

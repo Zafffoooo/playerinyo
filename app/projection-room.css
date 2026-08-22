@@ -562,9 +562,9 @@ body[data-visual-world="projection-room"][data-dock-mode="expanded"] #playlist-c
   flex-direction: column;
 }
 
-body[data-visual-world="projection-room"][data-dock-mode="expanded"] #playlist-controls-container .search-bar {
-  width: 100%;
-  max-width: 100% !important;
+body[data-visual-world="projection-room"][data-dock-mode="expanded"] #playlist-controls-container .playlist-track-search-wrap {
+  width: min(100%, 360px);
+  max-width: 360px !important;
 }
 
 body[data-visual-world="projection-room"][data-dock-mode="expanded"] .dock-playlist-name {
@@ -1049,6 +1049,20 @@ body[data-visual-world="projection-room"] .album-detail-header {
     linear-gradient(120deg, #101010, #303030) !important;
 }
 
+/* Playlist headers are compact control panels, not full-height hero panels.
+   Grid sizing keeps the table directly below the cover and controls. */
+@media (min-width: 761px) {
+  body[data-visual-world="projection-room"][data-view="playlist"] .album-detail-header {
+    min-height: 0 !important;
+    height: auto !important;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    align-content: start;
+    grid-auto-rows: max-content;
+  }
+}
+
 body[data-visual-world="projection-room"] .album-detail-cover-wrap {
   flex: 0 0 auto;
 }
@@ -1162,13 +1176,16 @@ body[data-visual-world="projection-room"] .playlist-workspace-actions {
 }
 
 body[data-visual-world="projection-room"] .playlist-workspace-search {
-  width: min(100%, 420px);
-  height: 42px;
+  inline-size: min(100%, 272px);
+  max-inline-size: 272px;
+  height: 40px;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 9px;
   margin-bottom: 28px;
   padding: 0 13px;
+  box-sizing: border-box;
   border-radius: 9px;
   background: #242424;
   color: var(--text-subdued);
@@ -1756,7 +1773,8 @@ body[data-visual-world="projection-room"] .playlist-sort-direction:disabled {
 body[data-visual-world="projection-room"] .playlist-sort-listbox {
   position: fixed;
   z-index: 9100;
-  width: max(100%, 178px);
+  width: max-content;
+  min-width: 178px;
   max-height: 230px;
   overflow-y: auto;
   padding: 5px;
@@ -1788,6 +1806,106 @@ body[data-visual-world="projection-room"] .playlist-sort-option.keyboard-active 
 }
 
 body[data-visual-world="projection-room"] .playlist-sort-option[aria-selected="true"] {
+  background: #f5f5f5;
+  color: #090909;
+}
+
+body[data-visual-world="projection-room"] .playlist-track-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 1 30px;
+  width: min(100%, 360px);
+  min-width: 0;
+  max-width: 360px;
+  height: 34px;
+}
+
+body[data-visual-world="projection-room"] .playlist-track-search-wrap > .ph-magnifying-glass {
+  position: absolute !important;
+  inset-inline-start: 10px;
+  inset-block-start: 50%;
+  z-index: 1;
+  transform: translateY(-50%) !important;
+}
+
+body[data-visual-world="projection-room"] .playlist-track-search-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 6px 16px 6px 32px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #242424;
+  color: #fff;
+  font-size: 12px;
+}
+
+body[data-visual-world="projection-room"] .library-sort-label {
+  color: #b8b8b8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+body[data-visual-world="projection-room"] .library-sort-picker {
+  position: relative;
+}
+
+body[data-visual-world="projection-room"] .library-sort-button {
+  min-width: 148px;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 10px 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, .42);
+  color: #f5f5f5;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+body[data-visual-world="projection-room"] .library-sort-listbox {
+  position: fixed;
+  z-index: 9100;
+  width: max-content;
+  min-width: 178px;
+  max-height: 230px;
+  overflow-y: auto;
+  padding: 5px;
+  border-radius: 9px;
+  background: #151515;
+  box-shadow: 8px 12px 30px rgba(0, 0, 0, .54);
+}
+
+body[data-visual-world="projection-room"] .library-sort-listbox[hidden] {
+  display: none;
+}
+
+body[data-visual-world="projection-room"] .library-sort-option {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: #b8b8b8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+body[data-visual-world="projection-room"] .library-sort-option:hover,
+body[data-visual-world="projection-room"] .library-sort-option.keyboard-active {
+  background: #282828;
+  color: #fff;
+}
+
+body[data-visual-world="projection-room"] .library-sort-option[aria-selected="true"] {
   background: #f5f5f5;
   color: #090909;
 }

@@ -113,13 +113,19 @@
           <div id="view-title-container">
             <h1 id="view-title" style="display:none;">Library</h1>
             <div id="library-sort-controls" class="view-title-actions" style="display:none;">
-              <label for="library-sort-select">Sort by</label>
-              <select id="library-sort-select">
-                <option value="artist">Artist (A-Z)</option>
-                <option value="album">Album (A-Z)</option>
-                <option value="year">Year</option>
-                <option value="recent">Recently Added</option>
-              </select>
+              <span class="library-sort-label" id="library-sort-label">Sort by</span>
+              <div class="library-sort-picker">
+                <button type="button" class="library-sort-button" id="library-sort-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="library-sort-listbox" aria-labelledby="library-sort-label library-sort-value">
+                  <span id="library-sort-value">Artist (A-Z)</span>
+                  <i class="ph ph-caret-down" aria-hidden="true"></i>
+                </button>
+                <div class="library-sort-listbox" id="library-sort-listbox" role="listbox" aria-labelledby="library-sort-label" tabindex="-1" hidden>
+                  <div id="library-sort-option-artist" class="library-sort-option" role="option" data-value="artist" aria-selected="true">Artist (A-Z)</div>
+                  <div id="library-sort-option-album" class="library-sort-option" role="option" data-value="album" aria-selected="false">Album (A-Z)</div>
+                  <div id="library-sort-option-year" class="library-sort-option" role="option" data-value="year" aria-selected="false">Year</div>
+                  <div id="library-sort-option-recent" class="library-sort-option" role="option" data-value="recent" aria-selected="false">Recently Added</div>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -308,10 +314,9 @@
                       <i class="ph ph-sort-ascending" aria-hidden="true"></i>
                     </button>
                   </div>
-                  <div class="search-bar" style="position:relative; max-width:250px; flex:1;">
+                  <div class="search-bar playlist-track-search-wrap">
                     <i class="ph ph-magnifying-glass" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-subdued);pointer-events:none;"></i>
-                    <input type="text" id="playlist-track-search" placeholder="Search in playlist (Ctrl+F)"
-                      style="width:100%;padding:6px 16px 6px 32px;border-radius:16px;border:1px solid var(--border);background:#242424;color:white;font-size:12px;" />
+                    <input type="text" id="playlist-track-search" class="playlist-track-search-input" placeholder="Search in playlist (Ctrl+F)" />
                   </div>
                 </div>
                 <button id="album-edit-metadata-btn" style="display:none;align-self:flex-start;margin-top:8px;padding:4px 10px;background:transparent;border:1px solid var(--border);border-radius:14px;color:var(--text-subdued);font-size:11px;line-height:1;cursor:pointer;align-items:center;gap:5px;">
@@ -502,6 +507,7 @@
         <span id="download-queue-summary">No active downloads</span>
       </div>
       <div class="download-queue-actions">
+        <button class="icon-btn ghost" id="download-album-start" title="Download album" aria-label="Download album"><i class="ph ph-vinyl-record" aria-hidden="true"></i></button>
         <button class="icon-btn ghost" id="download-search-toggle" title="Search & Download" aria-label="Search and download"><i class="ph ph-magnifying-glass"></i></button>
         <button class="icon-btn ghost" id="download-queue-clear" title="Clear completed and failed downloads" aria-label="Clear completed and failed downloads"><i class="ph ph-broom"></i></button>
         <button class="icon-btn ghost" id="download-queue-close" title="Close" aria-label="Close downloads"><i class="ph ph-x"></i></button>
