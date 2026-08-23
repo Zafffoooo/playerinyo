@@ -4,6 +4,9 @@ dist/
 *.log
 *.csv
 
+# Local test suite
+/test/
+
 # Local agent/session exports
 .impeccable/
 allah.md
