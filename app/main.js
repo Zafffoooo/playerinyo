@@ -26,6 +26,13 @@ const { sanitizeDownloadRecoveryRecord, normalizeDownloadRecoveryRecords } = req
 const { splitSerializedSettings } = require('./listening-stats-storage');
 const { getFreshEntry, setBoundedEntry } = require('./bounded-runtime-cache');
 const {
+  normalizePathInput,
+  isExistingDirectory: hasExistingDirectory,
+  isExistingFileWithExt: hasExistingFileWithExt,
+  isAllowedRadioStreamUrl: isAllowedRadioStreamUrlForHosts,
+  getRadioStreamLeaseToken,
+} = require('./main-security-helpers');
+const {
   AUTOMATIC_BACKUP_INTERVAL_MS,
   AUTOMATIC_BACKUP_RETENTION,
   createLocalBackupFilename,
@@ -3338,12 +3345,7 @@ function cancelRadioResolverRequest(requestId) {
 }
 
 function isAllowedRadioStreamUrl(value) {
-  try {
-    const parsed = new URL(value);
-    const host = parsed.hostname.toLowerCase();
-    return parsed.protocol === 'https:' && !parsed.username && !parsed.password
-      && Array.from(RADIO_STREAM_HOSTS).some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
-  } catch (_) { return false; }
+  return isAllowedRadioStreamUrlForHosts(value, RADIO_STREAM_HOSTS);
 }
 
 function initializeRadioStreamResolver() {
@@ -3366,9 +3368,9 @@ function initializeRadioStreamResolver() {
 function registerRadioStreamProtocol() {
   protocol.handle(RADIO_STREAM_SCHEME, async (request) => {
     try {
-      const parsed = new URL(request.url);
-      if (parsed.hostname !== 'lease' || !/^\/[A-Za-z0-9_-]{20,}$/.test(parsed.pathname || '') || !radioStreamResolver) return new Response('Not found', { status: 404 });
-      const lease = radioStreamResolver.getLease(parsed.pathname.slice(1), null);
+      const leaseToken = getRadioStreamLeaseToken(request.url);
+      if (!leaseToken || !radioStreamResolver) return new Response('Not found', { status: 404 });
+      const lease = radioStreamResolver.getLease(leaseToken, null);
       if (!lease || !isAllowedRadioStreamUrl(lease.url)) return new Response('Not found', { status: 404 });
       const headers = new Headers();
       Object.entries(lease.headers || {}).forEach(([key, value]) => {
@@ -3681,28 +3683,12 @@ function getSafeFileUrl(absolutePath) {
   return pathToFileURL(absolutePath).href;
 }
 
-function normalizePathInput(value) {
-  if (typeof value !== 'string') return '';
-  if (value.startsWith('file://')) {
-    try { return fileURLToPath(value); }
-    catch (e) { return ''; }
-  }
-  return value;
-}
-
 function isExistingDirectory(dirPath) {
-  dirPath = normalizePathInput(dirPath);
-  if (typeof dirPath !== 'string' || !path.isAbsolute(dirPath)) return false;
-  try { return fs.statSync(dirPath).isDirectory(); }
-  catch (e) { return false; }
+  return hasExistingDirectory(dirPath, fs);
 }
 
 function isExistingFileWithExt(filePath, extensions) {
-  filePath = normalizePathInput(filePath);
-  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return false;
-  if (!extensions.includes(path.extname(filePath).toLowerCase())) return false;
-  try { return fs.statSync(filePath).isFile(); }
-  catch (e) { return false; }
+  return hasExistingFileWithExt(filePath, extensions, fs);
 }
 
 function isManagedLibraryAudioFile(filePath) {
