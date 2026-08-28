@@ -93,6 +93,7 @@ test('path remap covers library, playlists, mappings, liked songs, and playback 
       playTimes: { [oldPath]: 10 },
       listeningStats: { 'name:north::signal': { count: 2, time: 10, filePath: oldPath } },
       lyricsOffsets: { [oldPath]: 1.5 },
+      trackNotes: { [oldPath]: 'Keep this note' },
       savedQueue: [oldPath],
       playbackSession: {
         queue: [{ filePath: oldPath, sourceRadio: { providerId: 'local-library', genreIds: ['rock'] } }], userQueue: [{ filePath: oldPath }], shuffleQueue: [{ filePath: oldPath }],
@@ -121,6 +122,7 @@ test('path remap covers library, playlists, mappings, liked songs, and playback 
   assert.equal(result.settings.playTimes[newPath], 10);
   assert.equal(result.settings.listeningStats['name:north::signal'].filePath, newPath);
   assert.equal(result.settings.lyricsOffsets[newPath], 1.5);
+  assert.equal(result.settings.trackNotes[newPath], 'Keep this note');
   assert.equal(result.settings.savedQueue[0], newPath);
   assert.equal(result.settings.playbackSession.currentTrack.filePath, newPath);
   assert.equal(result.settings.playbackSession.queue[0].filePath, newPath);

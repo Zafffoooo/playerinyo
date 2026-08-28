@@ -20,7 +20,7 @@ function validateMediaSource(format) {
 function chooseAudioFormat(info) { return (info && info.formats || []).map(validateMediaSource).filter(Boolean).sort((a, b) => b.preference - a.preference)[0] || null; }
 function parseSearchPayload(text) {
   const value = String(text || '').trim(); if (!value) throw new Error('yt-dlp returned invalid resolver data.');
-  try { const parsed = JSON.parse(value); if (parsed && typeof parsed === 'object') return parsed; } catch (_) { }
+  try { const parsed = JSON.parse(value); if (parsed && typeof parsed === 'object') return parsed; } catch (_) { /* Fall back to line-delimited JSON. */ }
   let entries; try { entries = value.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)); } catch (_) { throw new Error('yt-dlp returned malformed resolver data.'); }
   if (!entries.length || !entries.every((entry) => entry && typeof entry === 'object')) throw new Error('yt-dlp returned malformed resolver data.');
   return { entries };

@@ -2,6 +2,29 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.4 — 2026-08-28
+
+### Added
+
+- Added rule-based Smart Playlists for artist, album, genre, year, duration, liked, and played filters.
+- Added Daily Smart Playlists on Home: Günün Keşfi, Yeniden Dinle, and Hiç Çalmadıkların. They refresh each day, hold up to 50 tracks, and include at most two tracks from any album.
+- Added track and album notes from context menus. Notes are included in collection search and follow files when relinked.
+- Added mouse-wheel volume adjustment and a compact Now Playing volume control.
+- Added a source-playlist link in Listening Studio, so you can return to the playing playlist without interrupting playback.
+- Added ESLint, a regression CI workflow, and a restored 44-test suite.
+
+### Changed
+
+- Reworked the renderer into reviewable classic-script slices while keeping the app bundler-free.
+- Unified Smart Playlist cards with regular playlist sleeve sizing and refined Smart Playlist, note, and metadata form fields.
+- Updated Electron to 44 and rebuilt the local native socket dependency for the current Electron ABI.
+
+### Fixed
+
+- Restored the Ctrl/Cmd+K command palette from focused controls and made the global-search clear button neutral white.
+- Replaced renderer native alert/confirm dialogs with the in-app notification and modal system.
+- Added explanations for intentionally silent main-process cleanup catches and surfaced meaningful failures.
+
 ## 0.1.3 — 2026-08-23
 
 ### Added

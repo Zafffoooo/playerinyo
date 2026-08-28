@@ -318,7 +318,7 @@ function remapPath(value, remap) {
     try {
       const localPath = fileURLToPath(value);
       if (Object.prototype.hasOwnProperty.call(remap, localPath)) return pathToFileURL(remap[localPath]).href;
-    } catch (_) { }
+    } catch (_) { /* Invalid file URLs keep their original value. */ }
   }
   const valueKey = canonicalPath(value);
   for (const [oldPath, newPath] of Object.entries(remap)) {
@@ -342,7 +342,7 @@ function createPathRemapper(remap) {
         const localPath = fileURLToPath(value);
         const replacement = direct[localPath] || canonical.get(canonicalPath(localPath));
         if (replacement) return pathToFileURL(replacement).href;
-      } catch (_) { }
+      } catch (_) { /* Invalid file URLs keep their original value. */ }
       return value;
     }
     return canonical.get(canonicalPath(value)) || value;
@@ -394,6 +394,20 @@ function remapListeningStats(value, remap) {
   return next;
 }
 
+function remapStringMap(value, remap, warnings, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const next = {};
+  Object.entries(value).forEach(([key, entry]) => {
+    const mappedKey = remapPath(key, remap);
+    if (Object.prototype.hasOwnProperty.call(next, mappedKey) && next[mappedKey] !== entry) {
+      warnings.push(`${label}: kept the first entry for ${mappedKey}`);
+      return;
+    }
+    next[mappedKey] = entry;
+  });
+  return next;
+}
+
 function applyPathRemap(data, remap, options = {}) {
   const warnings = [];
   const source = cloneJson(data || {}) || {};
@@ -435,6 +449,7 @@ function applyPathRemap(data, remap, options = {}) {
   settings.playTimes = remapNumberMap(settings.playTimes, remapValue, 'sum', warnings, 'Play times');
   settings.listeningStats = remapListeningStats(settings.listeningStats, remapValue);
   settings.lyricsOffsets = remapNumberMap(settings.lyricsOffsets, remapValue, 'replace', warnings, 'Lyrics offsets');
+  settings.trackNotes = remapStringMap(settings.trackNotes, remapValue, warnings, 'Track notes');
   if (settings.lastTrack !== undefined) settings.lastTrack = remapTrackReference(settings.lastTrack, remapValue);
   if (Array.isArray(settings.playHistory)) settings.playHistory = settings.playHistory.map((track) => remapTrackReference(track, remapValue));
   if (settings.lastPlayed && typeof settings.lastPlayed === 'object' && typeof settings.lastPlayed.path === 'string') {

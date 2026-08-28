@@ -1,0 +1,7 @@
+{
+  "name": "abstract-socket",
+  "version": "2.1.1",
+  "private": true,
+  "main": "index.js",
+  "description": "Node net adapter for Linux abstract UNIX sockets"
+}

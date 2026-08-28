@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { execFile } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -7,8 +7,9 @@ const test = require('node:test');
 
 function run(command, args) { return new Promise((resolve, reject) => execFile(command, args, (error, stdout, stderr) => error ? reject(new Error(stderr || error.message)) : resolve(stdout))); }
 async function metadata(filePath) { const mm = await import('music-metadata'); return mm.parseFile(filePath); }
+const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch (_) { return false; } })();
 
-test('WebM Opus remuxes to Opus with stream copy and canonical tags', async () => {
+test('WebM Opus remuxes to Opus with stream copy and canonical tags', { skip: !hasFfmpeg }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'playerinyo-native-tags-'));
   const webm = path.join(root, 'input.webm'); const opus = path.join(root, 'output.opus');
   try {
@@ -22,7 +23,7 @@ test('WebM Opus remuxes to Opus with stream copy and canonical tags', async () =
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('M4A metadata remux keeps AAC codec', async () => {
+test('M4A metadata remux keeps AAC codec', { skip: !hasFfmpeg }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'playerinyo-native-tags-'));
   const source = path.join(root, 'input.m4a'); const output = path.join(root, 'output.m4a');
   try {

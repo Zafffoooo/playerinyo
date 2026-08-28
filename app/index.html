@@ -91,7 +91,7 @@
               <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
               <input type="search" id="global-search" placeholder="Search your collection" aria-label="Search your collection" aria-describedby="global-search-help"
                 autocomplete="off" />
-              <kbd aria-hidden="true">Ctrl K</kbd>
+              <button type="button" class="global-search-clear" id="global-search-clear" aria-label="Clear search" hidden><i class="ph ph-x" aria-hidden="true"></i></button>
               <span class="sr-only" id="global-search-help">Search tracks, albums, and artists. Filters such as artist, genre, year, and missing cover are supported.</span>
             </div>
           </div>
@@ -142,18 +142,18 @@
               </div>
               <div class="playlist-workspace-actions">
                 <button class="btn btn-outline" id="import-playlist-btn"><i class="ph ph-file-arrow-up" aria-hidden="true"></i> Import Playlist</button>
-                <button class="btn btn-outline" id="create-smart-mix-btn"><i class="ph ph-sparkle" aria-hidden="true"></i> New Smart Mix</button>
+                <button class="btn btn-outline" id="create-smart-mix-btn"><i class="ph ph-sparkle" aria-hidden="true"></i> New Smart Playlist</button>
                 <button class="btn btn-primary" id="create-playlist-btn"><i class="ph ph-plus" aria-hidden="true"></i> New playlist</button>
                 <button class="icon-btn ghost" id="btn-fullscreen-playlists" title="Close playlists" aria-label="Close playlists"><i class="ph ph-x" aria-hidden="true"></i></button>
               </div>
             </header>
             <label class="playlist-workspace-search" for="playlist-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="search" id="playlist-search" placeholder="Search playlists" /></label>
-            <p class="playlist-search-empty" id="playlist-search-empty" hidden>No playlists or Smart Mixes match this search.</p>
+            <p class="playlist-search-empty" id="playlist-search-empty" hidden>No playlists or Smart Playlists match this search.</p>
             <section class="playlist-workspace-section" id="smart-mixes-section" aria-labelledby="smart-mixes-title">
               <header class="playlist-workspace-section-head">
                 <div>
-                  <h2 id="smart-mixes-title">Smart Mixes</h2>
-                  <p>Stable selections shaped from your local library.</p>
+                  <h2 id="smart-mixes-title">Smart Playlists</h2>
+                  <p>Live selections shaped from your local library.</p>
                 </div>
               </header>
               <div class="smart-mixes-grid" id="smart-mixes-list"></div>
@@ -213,6 +213,17 @@
                 </div>
               </div>
               <div class="albums-grid" id="home-recently-added"></div>
+            </section>
+
+            <section class="home-shelf" id="home-daily-smart-playlists-section" aria-labelledby="daily-smart-playlists-heading">
+              <div class="home-shelf-header">
+                <div>
+                  <h2 id="daily-smart-playlists-heading">Daily Smart Playlists</h2>
+                  <p>Fresh each day. Up to 50 tracks, with no more than two from one album.</p>
+                </div>
+              </div>
+              <div class="smart-mixes-grid home-daily-smart-playlists" id="home-daily-smart-playlists"></div>
+              <p class="home-shelf-empty" id="home-daily-smart-playlists-empty" hidden>No daily playlists are available until you play or import more music.</p>
             </section>
 
             <section class="home-shelf" aria-labelledby="most-played-heading">
@@ -344,7 +355,7 @@
 
       <aside class="listening-studio" aria-label="Listening studio">
         <div class="studio-head">
-          <span>Listening studio</span>
+          <button type="button" class="studio-source-playlist" id="studio-source-playlist" disabled>Listening studio</button>
           <div>
             <button class="icon-btn ghost" id="btn-now-playing-overlay" title="Now Playing View (N)" aria-expanded="false" aria-controls="now-playing-overlay"><i class="ph ph-arrows-out" aria-hidden="true"></i></button>
           </div>
@@ -388,14 +399,14 @@
           <div class="player-extras">
             <button class="icon-btn ghost" id="btn-lastfm-login" title="Connect to Last.fm"><i class="ph-fill ph-lastfm-logo" id="lastfm-icon"></i></button>
             <button class="icon-btn ghost" id="btn-eq" title="Equalizer"><i class="ph ph-sliders"></i></button>
-            <button class="icon-btn ghost studio-tab" id="btn-queue-toggle" title="Queue" aria-expanded="false" aria-controls="queue-panel"><i class="ph ph-queue"></i><span>Queue</span></button>
-            <button class="icon-btn ghost studio-tab" id="btn-lyrics-toggle" title="Lyrics" aria-expanded="false" aria-controls="lyrics-panel"><i class="ph ph-microphone-stage"></i><span>Lyrics</span></button>
+            <button class="icon-btn ghost studio-tab" id="btn-queue-toggle" title="Queue" aria-label="Open queue" aria-expanded="false" aria-controls="queue-panel"><i class="ph ph-queue" aria-hidden="true"></i><span class="sr-only">Queue</span></button>
+            <button class="icon-btn ghost studio-tab" id="btn-lyrics-toggle" title="Lyrics" aria-label="Open lyrics" aria-expanded="false" aria-controls="lyrics-panel"><i class="ph ph-microphone-stage" aria-hidden="true"></i><span class="sr-only">Lyrics</span></button>
             <div class="studio-volume-control">
               <button type="button" class="icon-btn ghost player-volume-icon" id="btn-volume-toggle" aria-label="Mute" aria-pressed="false"><i class="ph ph-speaker-high" aria-hidden="true"></i></button>
               <div class="volume-bar-container" role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-valuetext="100 percent">
                 <div class="progress-bar volume-bar" id="volume-bar" style="width:100%;"><div class="progress-thumb"></div></div>
               </div>
-              <output id="volume-value" aria-live="off">100%</output>
+              <output class="volume-value" id="volume-value" aria-live="off">100%</output>
             </div>
           </div>
 
@@ -459,12 +470,21 @@
         </div>
         <!-- transport controls -->
         <div class="np-controls">
+          <button class="icon-btn ghost np-ctrl-btn" id="np-btn-like" aria-label="Like current track" aria-pressed="false"><i class="ph ph-heart" id="np-like-icon" aria-hidden="true"></i></button>
           <button class="icon-btn ghost np-ctrl-btn playback-mode-control" id="np-btn-shuffle" data-mode="off" aria-label="Shuffle mode: Off" aria-pressed="false" title="Shuffle: Off"><span class="playback-mode-icon"><i class="ph ph-shuffle" aria-hidden="true"></i></span><span class="playback-mode-label">OFF</span></button>
           <button class="icon-btn ghost np-ctrl-btn" id="np-btn-prev" aria-label="Previous track"><i class="ph ph-skip-back-circle" aria-hidden="true"></i></button>
           <button class="icon-btn np-play-btn" id="np-btn-play" aria-label="Play"><i class="ph ph-play-circle" id="np-play-icon" aria-hidden="true"></i></button>
           <button class="icon-btn ghost np-ctrl-btn" id="np-btn-next" aria-label="Next track"><i class="ph ph-skip-forward-circle" aria-hidden="true"></i></button>
           <button class="icon-btn ghost np-ctrl-btn playback-mode-control" id="np-btn-loop" data-mode="off" aria-label="Repeat mode: Off" aria-pressed="false" title="Repeat: Off"><span class="playback-mode-icon"><i class="ph ph-repeat" id="np-loop-icon" aria-hidden="true"></i></span><span class="playback-mode-label">OFF</span></button>
-          <button class="icon-btn ghost np-ctrl-btn" id="np-btn-like" aria-label="Like current track" aria-pressed="false"><i class="ph ph-heart" id="np-like-icon" aria-hidden="true"></i></button>
+          <div class="np-volume-control">
+            <div class="np-volume-popover">
+              <div class="volume-bar-container np-volume-bar-container" role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-valuetext="100 percent">
+                <div class="progress-bar volume-bar" id="np-volume-bar" style="width:100%;"><div class="progress-thumb"></div></div>
+              </div>
+              <output class="volume-value np-volume-value" id="np-volume-value" aria-live="off">100%</output>
+            </div>
+            <button type="button" class="icon-btn ghost player-volume-icon np-volume-toggle" id="np-btn-volume-toggle" aria-label="Mute" aria-pressed="false"><i class="ph ph-speaker-high" aria-hidden="true"></i></button>
+          </div>
         </div>
         <!-- progress bar -->
         <div class="np-progress-wrap">
@@ -1005,6 +1025,22 @@
     </div>
   </div>
 
+  <div id="smart-rule-playlist-modal" class="modal-overlay" aria-labelledby="srp-title">
+    <div class="modal-content smart-mix-builder">
+      <header class="smart-mix-builder-head"><span class="smart-mix-builder-mark" aria-hidden="true"><i class="ph ph-faders"></i></span><div><h2 id="srp-title">New Smart Playlist</h2><p>Tracks must match every rule.</p></div></header>
+      <label class="smart-mix-field" for="srp-name"><span>Name</span><input id="srp-name" maxlength="120" placeholder="Late Night Favourites" autocomplete="off"></label>
+      <div id="srp-rules" class="smart-mix-fieldset" aria-label="Playlist rules"></div>
+      <button type="button" class="btn btn-outline" id="srp-add-rule"><i class="ph ph-plus" aria-hidden="true"></i> Add rule</button>
+      <p class="smart-mix-builder-error" id="srp-error" role="alert" hidden></p>
+      <div class="smart-mix-preview" role="status" aria-live="polite"><strong id="srp-preview-num">0</strong><span> matching tracks</span></div>
+      <div class="smart-mix-builder-actions"><button class="btn btn-outline" id="srp-cancel">Cancel</button><button class="btn btn-primary" id="srp-save">Create Playlist</button></div>
+    </div>
+  </div>
+
+  <div id="library-note-modal" class="modal-overlay" aria-labelledby="library-note-title">
+    <div class="modal-content library-note-editor" style="width:440px;max-width:calc(100vw - 32px);"><h2 id="library-note-title">Edit note</h2><p id="library-note-subtitle" style="color:var(--text-subdued);margin:8px 0 14px;"></p><textarea id="library-note-input" maxlength="2000" rows="7" style="width:100%;resize:vertical;"></textarea><div style="display:flex;gap:10px;margin-top:18px;"><button class="btn btn-outline" id="library-note-cancel">Cancel</button><button class="btn btn-primary" id="library-note-save">Save note</button></div></div>
+  </div>
+
   <!-- Create Playlist Modal -->
   <div id="create-playlist-modal" class="modal-overlay">
     <div class="modal-content" style="width:420px;">
@@ -1040,6 +1076,7 @@
     <button type="button" class="menu-item" id="actx-play-next" role="menuitem"><i class="ph ph-skip-forward"></i> Play Next</button>
     <button type="button" class="menu-item" id="actx-add-queue" role="menuitem"><i class="ph ph-queue"></i> Add to Queue</button>
     <button type="button" class="menu-item" id="actx-edit-metadata" role="menuitem"><i class="ph ph-pencil-simple"></i> Edit Album Metadata</button>
+    <button type="button" class="menu-item" id="actx-edit-note" role="menuitem"><i class="ph ph-note-pencil"></i> Edit Album Note</button>
     <button type="button" class="menu-item" id="actx-analyze-loudness" role="menuitem"><i class="ph ph-waveform"></i> Analyze Loudness</button>
     <button type="button" class="menu-item" id="actx-split-disc" role="menuitem"><i class="ph ph-vinyl-record"></i> Split by Disc</button>
     <button type="button" class="menu-item" id="actx-open-folder" role="menuitem"><i class="ph ph-folder-open"></i> Open File Location</button>
@@ -1058,6 +1095,7 @@
     <button type="button" class="menu-item" id="ctx-add-queue" role="menuitem"><i class="ph ph-queue"></i> Add to Queue</button>
     <button type="button" class="menu-item" id="ctx-go-to-album" role="menuitem"><i class="ph ph-vinyl-record"></i> Go to Album</button>
     <button type="button" class="menu-item" id="ctx-edit-metadata" role="menuitem"><i class="ph ph-pencil-simple"></i> Edit Metadata</button>
+    <button type="button" class="menu-item" id="ctx-edit-note" role="menuitem"><i class="ph ph-note-pencil"></i> Edit Note</button>
     <button type="button" class="menu-item" id="ctx-analyze-loudness" role="menuitem"><i class="ph ph-waveform"></i> Analyze Loudness</button>
     <button type="button" class="menu-item" id="ctx-open-folder" role="menuitem"><i class="ph ph-folder-open"></i> Open File Location</button>
     <button type="button" class="menu-item is-accent" id="ctx-download-track" role="menuitem" hidden><i class="ph ph-download-simple"></i> Download Track…</button>
@@ -1338,6 +1376,16 @@
   </div>
 
   <div id="app-toast" class="app-toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+  <div id="app-confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="app-confirm-title" aria-describedby="app-confirm-message">
+    <div class="modal-content app-confirm-dialog">
+      <h2 id="app-confirm-title">Confirm action</h2>
+      <p id="app-confirm-message"></p>
+      <div class="app-confirm-actions">
+        <button type="button" class="btn btn-outline" id="app-confirm-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="app-confirm-continue">Continue</button>
+      </div>
+    </div>
+  </div>
   <div id="artwork-lightbox-modal" class="modal-overlay artwork-lightbox-modal" role="dialog" aria-modal="true" aria-label="Artwork preview">
     <div class="artwork-lightbox-dialog" role="document" tabindex="-1">
       <img id="artwork-lightbox-image" src="../assets/icon.png" alt="" />
@@ -1360,6 +1408,14 @@
   <script src="playback-local-upgrade.js"></script>
   <script src="remote-preparation-coordinator.js"></script>
   <script src="lyrics-cache.js"></script>
+  <script src="daily-smart-playlists.js"></script>
   <script src="renderer.js"></script>
+  <script src="renderer-radio-library.js"></script>
+  <script src="renderer-library-playback.js"></script>
+  <script src="renderer-playback-downloads.js"></script>
+  <script src="renderer-downloads-ui.js"></script>
+  <script src="renderer-settings-ui.js"></script>
+  <script src="renderer-metadata-ui.js"></script>
+  <script src="renderer-playback-ui.js"></script>
 </body>
 </html>

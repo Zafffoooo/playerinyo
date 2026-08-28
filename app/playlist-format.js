@@ -11,7 +11,7 @@ const MAX_META_CHARS = 2000;
 const MAX_PLAYLIST_NAME_CHARS = 1000;
 
 function assertSafeText(value, label, maxLength) {
-  const text = String(value == null ? '' : value);
+  const text = String(value === null || value === undefined ? '' : value);
   if (text.length > maxLength) throw new Error(`${label} is too long`);
   for (let index = 0; index < text.length; index++) {
     if (text.charCodeAt(index) === 0 || text.charCodeAt(index) === 10 || text.charCodeAt(index) === 13) {
@@ -45,7 +45,7 @@ function titleFromLocation(location) {
   try {
     const parsed = new URL(location);
     value = decodeURIComponent(parsed.pathname);
-  } catch (_) { }
+  } catch (_) { /* Non-URL playlist entries use their filesystem basename. */ }
   const flavor = pathFlavor(value);
   return flavor.basename(value, flavor.extname(value));
 }

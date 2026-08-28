@@ -44,6 +44,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Run regression suite
+        run: npm test
       - name: Package application
         run: ${{ matrix.command }}
       - name: Archive Linux package

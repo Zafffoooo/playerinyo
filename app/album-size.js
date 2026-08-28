@@ -60,7 +60,7 @@ async function sumTrackFiles(filePaths) {
     try {
       const stat = await fs.promises.lstat(filePath);
       if (stat.isFile() && !stat.isSymbolicLink()) { total += stat.size; readable = true; }
-    } catch (_) { }
+    } catch (_) { /* Missing tracks are excluded from a best-effort size total. */ }
   }
   return readable ? total : null;
 }
@@ -78,7 +78,7 @@ async function calculateAlbumSize(tracks, options = {}) {
     try {
       const stat = await fs.promises.lstat(filePath);
       if (stat.isFile() && !stat.isSymbolicLink()) readablePaths.push(filePath);
-    } catch (_) { }
+    } catch (_) { /* Unreadable tracks are unavailable for folder sizing. */ }
   }
   if (!readablePaths.length) return { bytes: null, mode: 'tracks', root: '' };
   const root = getAlbumRoot(readablePaths);

@@ -12,7 +12,7 @@ function restoreCacheEntries(value, now) {
     if (!Number.isFinite(entry[1].expiresAt) || entry[1].expiresAt <= now) return;
     try {
       if (Buffer.byteLength(JSON.stringify(entry[1].value), 'utf8') <= 512 * 1024) restored.push([entry[0].slice(0, 1000), { value: entry[1].value, expiresAt: entry[1].expiresAt }]);
-    } catch (_) { }
+    } catch (_) { /* Invalid cached JSON values are intentionally discarded. */ }
   });
   return restored;
 }
