@@ -21,6 +21,7 @@ All notable changes to Playerinyo are recorded in this file.
 
 ### Fixed
 
+- Made the release pipeline verify tests, lint, and production dependencies once before cross-platform packaging, so platform-specific test-runner differences do not block valid release artifacts.
 - Restored the Ctrl/Cmd+K command palette from focused controls and made the global-search clear button neutral white.
 - Replaced renderer native alert/confirm dialogs with the in-app notification and modal system.
 - Added explanations for intentionally silent main-process cleanup catches and surfaced meaningful failures.

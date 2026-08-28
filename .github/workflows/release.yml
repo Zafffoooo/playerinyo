@@ -10,7 +10,22 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm audit --omit=dev
+
   package:
+    needs: verify
     name: Package ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -44,8 +59,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Run regression suite
-        run: npm test
       - name: Package application
         run: ${{ matrix.command }}
       - name: Archive Linux package
