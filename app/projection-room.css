@@ -2701,6 +2701,13 @@ body[data-visual-world="projection-room"] .stats-list {
   flex-direction: column;
 }
 
+body[data-visual-world="projection-room"] .stats-recent { margin-bottom: 34px; }
+body[data-visual-world="projection-room"] .stats-recent .stats-list { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px; }
+body[data-visual-world="projection-room"] .stats-recent .stats-track { grid-template-columns:50px minmax(0,1fr) auto; }
+body[data-visual-world="projection-room"] .stats-recent .stats-count { font-variant-numeric:tabular-nums; }
+body[data-visual-world="projection-room"] .stats-recent-empty { color:var(--text-subdued);font-size:13px; }
+@media (max-width:800px) { body[data-visual-world="projection-room"] .stats-recent .stats-list { grid-template-columns:minmax(0,1fr); } }
+
 body[data-visual-world="projection-room"] .stats-track {
   display: grid;
   grid-template-columns: 28px 50px minmax(0, 1fr) auto;

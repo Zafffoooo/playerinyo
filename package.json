@@ -1,16 +1,16 @@
 {
   "dependencies": {
     "@phosphor-icons/web": "2.1.2",
-    "csv-parse": "^5.5.5",
+    "abstract-socket": "file:vendor/abstract-socket",
+    "csv-parse": "^7.0.3",
     "discord-rpc": "^4.0.1",
     "mpris-service": "^2.1.2",
-    "music-metadata": "^11.12.3",
-    "node-id3": "^0.2.9",
-    "abstract-socket": "file:vendor/abstract-socket"
+    "music-metadata": "^11.16.1",
+    "node-id3": "^0.2.9"
   },
   "name": "playerinyo",
   "productName": "Playerinyo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Offline music player",
   "main": "app/main.js",
   "scripts": {

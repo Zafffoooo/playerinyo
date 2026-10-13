@@ -85,6 +85,24 @@ test('imported settings preserve bounded notes and rule-based Smart Playlists', 
   assert.deepEqual(sanitized.customSmartPlaylists[0].rules, [{ field: 'genre', value: 'jazz' }, { field: 'played', value: 'false' }]);
 });
 
+test('listening history keeps source counts and recorded dates through settings sanitization', () => {
+  const first = '2026-10-12T10:00:00.000Z';
+  const last = '2026-10-13T12:30:00.000Z';
+  const row = {
+    count: 3, time: 420, title: 'Song', artist: 'Artist', album: 'Album', albumArtist: 'Album Artist',
+    firstPlayedAt: first, lastPlayedAt: last,
+    sources: {
+      local: { count: 2, time: 300, firstPlayedAt: first, lastPlayedAt: last },
+      remote: { count: 1, time: 120, firstPlayedAt: last, lastPlayedAt: last },
+    },
+  };
+  const sanitized = sanitizeImportedSettings({ listeningStats: { 'name:artist::song': row } });
+  assert.equal(sanitized.listeningStats['name:artist::song'].albumArtist, 'Album Artist');
+  assert.equal(sanitized.listeningStats['name:artist::song'].firstPlayedAt, first);
+  assert.equal(sanitized.listeningStats['name:artist::song'].lastPlayedAt, last);
+  assert.deepEqual(sanitized.listeningStats['name:artist::song'].sources, row.sources);
+});
+
 test('imported settings reject malformed Smart Playlist rules', () => {
   assert.throws(() => sanitizeImportedSettings({ customSmartPlaylists: [{ id: 'x', name: 'X', rules: [{ field: 'played', value: 'maybe' }] }] }), /invalid/);
   assert.throws(() => sanitizeImportedSettings({ trackNotes: { '/music/a.flac': 'x'.repeat(2001) } }), /invalid string value/);

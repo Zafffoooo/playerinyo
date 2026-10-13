@@ -1410,6 +1410,13 @@ function fileHasMissingField(f, value) {
 }
 function matchesLibrarySearchFilter(f, filter, parsed) {
   var value = filter.value;
+  var albumKey = getAlbumKey(f);
+  if (filter.key === 'albumrating') {
+    var rating = Number((appSettings.albumRatings || {})[albumKey] || 0);
+    var requested = Number(value);
+    return Number.isFinite(requested) && rating * 2 >= requested;
+  }
+  if (filter.key === 'albums' && value === 'liked') return !!(appSettings.likedAlbums || {})[albumKey];
   if (filter.key === 'artist') return String(f.artist || '').toLowerCase().indexOf(value) !== -1 || String(f.albumArtist || '').toLowerCase().indexOf(value) !== -1;
   if (filter.key === 'album') return String(f.album || '').toLowerCase().indexOf(value) !== -1;
   if (filter.key === 'title' || filter.key === 'song') return String(f.title || '').toLowerCase().indexOf(value) !== -1;

@@ -1270,6 +1270,8 @@ function normalizeListeningStatSources(value) {
     if (!row || typeof row !== 'object') return;
     result[source].count = Math.max(0, Number(row.count) || 0);
     result[source].time = Math.max(0, Number(row.time) || 0);
+    result[source].firstPlayedAt = typeof row.firstPlayedAt === 'string' ? row.firstPlayedAt : '';
+    result[source].lastPlayedAt = typeof row.lastPlayedAt === 'string' ? row.lastPlayedAt : '';
   });
   return result;
 }
@@ -1285,6 +1287,10 @@ function mergeListeningStatSources(target, source) {
   var sources = normalizeListeningStatSources(source && source.sources);
   addListeningStatSource(target, 'local', sources.local.count, sources.local.time);
   addListeningStatSource(target, 'remote', sources.remote.count, sources.remote.time);
+  ['local', 'remote'].forEach(function (source) {
+    if (sources[source].firstPlayedAt && (!target.sources[source].firstPlayedAt || Date.parse(sources[source].firstPlayedAt) < Date.parse(target.sources[source].firstPlayedAt))) target.sources[source].firstPlayedAt = sources[source].firstPlayedAt;
+    if (sources[source].lastPlayedAt && (!target.sources[source].lastPlayedAt || Date.parse(sources[source].lastPlayedAt) > Date.parse(target.sources[source].lastPlayedAt))) target.sources[source].lastPlayedAt = sources[source].lastPlayedAt;
+  });
 }
 function listeningStatValuesForSource(entry, source) {
   if (window.ListeningStatsSources) return window.ListeningStatsSources.values(entry, source);
@@ -1350,7 +1356,7 @@ function migrateLegacyPathStats() {
 function getListeningStatEntries() {
   var entries = {}; var byPath = getLibraryIndex().byPath;
   Object.keys(appSettings.playCounts || {}).forEach(function (path) { var file = byPath.get(path); var key = file && getListeningStatIdentity(file); if (!key) return; var row = entries[key] || (entries[key] = { key:key, count:0, time:0, file:file, title:file.title, artist:file.artist, album:file.album, albumArtist:file.albumArtist || file.artist, picture:file.picture || '' }); row.count += Number(appSettings.playCounts[path]) || 0; row.time += Number((appSettings.playTimes || {})[path]) || 0; });
-  Object.keys(getListeningStats()).forEach(function (key) { var saved = getListeningStats()[key]; if (!saved || typeof saved !== 'object') return; var local = saved.filePath && byPath.get(saved.filePath); if (!entries[key] && saved.trackMbid && saved.nameKey && entries[saved.nameKey]) { entries[key] = entries[saved.nameKey]; entries[key].key = key; delete entries[saved.nameKey]; } var row = entries[key] || (entries[key] = { key:key, count:0, time:0 }); row.count += Number(saved.count) || 0; row.time += Number(saved.time) || 0; mergeListeningStatSources(row, saved); row.file = local || row.file; row.title = saved.title || (local && local.title) || row.title; row.artist = saved.artist || (local && local.artist) || row.artist; row.album = saved.album || (local && local.album) || row.album; row.albumArtist = saved.albumArtist || (local && local.albumArtist) || row.albumArtist || row.artist; row.picture = saved.picture || (local && local.picture) || row.picture || ''; });
+  Object.keys(getListeningStats()).forEach(function (key) { var saved = getListeningStats()[key]; if (!saved || typeof saved !== 'object') return; var local = saved.filePath && byPath.get(saved.filePath); if (!entries[key] && saved.trackMbid && saved.nameKey && entries[saved.nameKey]) { entries[key] = entries[saved.nameKey]; entries[key].key = key; delete entries[saved.nameKey]; } var row = entries[key] || (entries[key] = { key:key, count:0, time:0 }); row.count += Number(saved.count) || 0; row.time += Number(saved.time) || 0; mergeListeningStatSources(row, saved); row.firstPlayedAt = row.firstPlayedAt || saved.firstPlayedAt || ''; row.lastPlayedAt = saved.lastPlayedAt || row.lastPlayedAt || ''; row.file = local || row.file; row.title = saved.title || (local && local.title) || row.title; row.artist = saved.artist || (local && local.artist) || row.artist; row.album = saved.album || (local && local.album) || row.album; row.albumArtist = saved.albumArtist || (local && local.albumArtist) || row.albumArtist || row.artist; row.picture = saved.picture || (local && local.picture) || row.picture || ''; });
   return Object.values(entries);
 }
 function recordPlayStat(track) {
@@ -1363,9 +1369,28 @@ function recordPlayStat(track) {
   }
   var row = stats[key] && typeof stats[key] === 'object' ? stats[key] : { count: 0, time: 0 };
   row.count = (Number(row.count) || 0) + 1;
-  addListeningStatSource(row, getListeningStatSource(track), 1, 0);
+  var playedAt = new Date().toISOString();
+  row.firstPlayedAt = row.firstPlayedAt || playedAt;
+  row.lastPlayedAt = playedAt;
+  var playbackSource = getListeningStatSource(track);
+  addListeningStatSource(row, playbackSource, 1, 0);
+  row.sources[playbackSource].firstPlayedAt = row.sources[playbackSource].firstPlayedAt || playedAt;
+  row.sources[playbackSource].lastPlayedAt = playedAt;
   row.title = track.title || (file && file.title) || row.title || 'Unknown Track'; row.artist = track.artist || (file && file.artist) || row.artist || 'Unknown Artist'; row.album = track.album || (file && file.album) || row.album || ''; row.albumArtist = track.albumArtist || (file && file.albumArtist) || row.albumArtist || row.artist; row.picture = getTrackArtworkUrl(track) || row.picture || ''; row.trackMbid = trackMbid || row.trackMbid || ''; row.nameKey = nameKey; if (file && file.filePath) row.filePath = file.filePath;
   stats[key] = row; listeningStats = stats; saveListeningStatsDebounced(1000);
+}
+
+function formatListeningDateRange(first, last) {
+  if (!first && !last) return '';
+  var format = function (value) { var date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString(); };
+  var start = format(first), end = format(last);
+  if (!start && !end) return '';
+  return start && end && start !== end ? start + ' – ' + end : (end || start);
+}
+
+function formatLastListened(value) {
+  var date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function recordListeningProgress(audioEl) {
@@ -1393,7 +1418,8 @@ function renderStatsView() {
   container.style.display = 'block';
   var trackEntries = getListeningStatEntries().map(function(entry) {
     var values = listeningStatValuesForSource(entry, statsSourceFilter);
-    return Object.assign({}, entry, values);
+    var dates = statsSourceFilter === 'all' ? entry : normalizeListeningStatSources(entry.sources)[statsSourceFilter];
+    return Object.assign({}, entry, values, { firstPlayedAt: dates.firstPlayedAt || '', lastPlayedAt: dates.lastPlayedAt || '' });
   }).filter(function(entry) { return entry.count > 0 || entry.time > 0; }).sort(function(a,b){return b.count-a.count;});
   var totalSecs = trackEntries.reduce(function(sum, entry) { return sum + entry.time; }, 0);
   var totalHrs = Math.floor(totalSecs/3600), totalMins = Math.floor((totalSecs%3600)/60);
@@ -1401,8 +1427,8 @@ function renderStatsView() {
   trackEntries.forEach(function(e){var a=e.artist||'Unknown';artistCounts[a]=(artistCounts[a]||0)+e.count;});
   var topArtists = Object.keys(artistCounts).map(function(a){return{name:a,count:artistCounts[a]};}).sort(function(a,b){return b.count-a.count;}).slice(0,6);
   var albumCounts = {};
-  trackEntries.forEach(function(e){var k=getAlbumKey({ album:e.album || 'Unknown Album', albumArtist:e.albumArtist || e.artist || 'Unknown Artist', artist:e.artist || 'Unknown Artist' });albumCounts[k]=(albumCounts[k]||0)+e.count;});
-  var topAlbums = Object.keys(albumCounts).map(function(k){return{name:k.split('::')[0],artist:k.split('::')[1],count:albumCounts[k]};}).sort(function(a,b){return b.count-a.count;}).slice(0,6);
+  trackEntries.forEach(function(e){var k=getAlbumKey({ album:e.album || 'Unknown Album', albumArtist:e.albumArtist || e.artist || 'Unknown Artist', artist:e.artist || 'Unknown Artist' });var album=albumCounts[k]||(albumCounts[k]={count:0,time:0,firstPlayedAt:'',lastPlayedAt:''});album.count+=e.count;album.time+=e.time;if(e.firstPlayedAt&&(!album.firstPlayedAt||Date.parse(e.firstPlayedAt)<Date.parse(album.firstPlayedAt)))album.firstPlayedAt=e.firstPlayedAt;if(e.lastPlayedAt&&(!album.lastPlayedAt||Date.parse(e.lastPlayedAt)>Date.parse(album.lastPlayedAt)))album.lastPlayedAt=e.lastPlayedAt;});
+  var topAlbums = Object.keys(albumCounts).map(function(k){return Object.assign({name:k.split('::')[0],artist:k.split('::')[1]},albumCounts[k]);}).sort(function(a,b){return b.count-a.count;}).slice(0,6);
   var maxCount = trackEntries.length>0?trackEntries[0].count:1;
   var maxArtist = topArtists.length>0?topArtists[0].count:1;
   var totalPlays = trackEntries.reduce(function(a,e){return a+e.count;},0);
@@ -1413,12 +1439,25 @@ function renderStatsView() {
   });
   html += '</div>';
   if (trackEntries.length===0) { html+='<div class="stats-empty"><i class="ph ph-chart-bar" aria-hidden="true"></i><strong>No listening history yet</strong><span>' + (statsSourceFilter === 'all' ? 'Play a track and this view will begin to fill in.' : 'No source-labelled listening history yet. New plays are labelled automatically.') + '</span></div></div>'; container.innerHTML=html; bindStatsSourceFilter(container); return; }
+  var recentEntries = trackEntries.filter(function (entry) { return entry.lastPlayedAt && Number.isFinite(Date.parse(entry.lastPlayedAt)); }).sort(function (a, b) { return Date.parse(b.lastPlayedAt) - Date.parse(a.lastPlayedAt); }).slice(0, 10);
+  html += '<section class="stats-section stats-recent"><h2>Last listened' + (statsSourceFilter === 'remote' ? ' · Streamed' : statsSourceFilter === 'local' ? ' · Local' : '') + '</h2>';
+  if (!recentEntries.length) html += '<p class="stats-recent-empty">Play a track to start a dated history. Older plays have no recorded date.</p>';
+  else {
+    html += '<div class="stats-list">';
+    recentEntries.forEach(function (entry) {
+      var cover = entry.picture ? '<img class="stats-cover" src="' + esc(entry.picture) + '" alt="">' : '<span class="stats-cover placeholder"><i class="ph ph-music-notes" aria-hidden="true"></i></span>';
+      html += '<div class="stats-track">' + cover + '<span class="stats-track-copy"><strong>' + esc(entry.title || 'Unknown') + '</strong><small>' + esc(entry.artist || 'Unknown') + '</small></span><time class="stats-count" datetime="' + esc(entry.lastPlayedAt) + '">' + esc(formatLastListened(entry.lastPlayedAt)) + '</time></div>';
+    });
+    html += '</div>';
+  }
+  html += '</section>';
   html += '<div class="stats-columns">';
   html += '<section class="stats-section stats-tracks"><h2>Top tracks</h2><div class="stats-list">';
   trackEntries.slice(0,10).forEach(function(e,i){
     var pct=Math.round((e.count/maxCount)*100);
     var cover=e.picture?'<img class="stats-cover" src="'+esc(e.picture)+'" alt="">':'<span class="stats-cover placeholder"><i class="ph ph-music-notes" aria-hidden="true"></i></span>';
-    html+='<div class="stats-track"><span class="stats-rank">'+String(i+1).padStart(2,'0')+'</span>'+cover+'<span class="stats-track-copy"><strong>'+esc(e.title||'Unknown')+'</strong><small>'+esc(e.artist||'Unknown')+'</small><span class="stats-meter"><i style="width:'+pct+'%"></i></span></span><span class="stats-count">'+e.count+' plays</span></div>';
+    var dateRange = formatListeningDateRange(e.firstPlayedAt, e.lastPlayedAt);
+    html+='<div class="stats-track"><span class="stats-rank">'+String(i+1).padStart(2,'0')+'</span>'+cover+'<span class="stats-track-copy"><strong>'+esc(e.title||'Unknown')+'</strong><small>'+esc(e.artist||'Unknown')+(dateRange ? ' · Played '+esc(dateRange) : '')+'</small><span class="stats-meter"><i style="width:'+pct+'%"></i></span></span><span class="stats-count">'+e.count+' plays<br>'+Math.floor(e.time/60)+' min</span></div>';
   });
   html += '</div></section><div class="stats-secondary">';
   html += '<section class="stats-section"><h2>Top artists</h2><div class="stats-list">';
@@ -1428,7 +1467,8 @@ function renderStatsView() {
   });
   html += '</div></section><section class="stats-section"><h2>Top albums</h2><div class="stats-list">';
   topAlbums.forEach(function(a){
-    html+='<div class="stats-album"><span><strong>'+esc(a.name)+'</strong><small>'+esc(a.artist)+'</small></span><span class="stats-count">'+a.count+' plays</span></div>';
+    var dates=formatListeningDateRange(a.firstPlayedAt,a.lastPlayedAt);
+    html+='<div class="stats-album"><span><strong>'+esc(a.name)+'</strong><small>'+esc(a.artist)+(dates?' · '+esc(dates):'')+'</small></span><span class="stats-count">'+a.count+' plays<br>'+Math.floor(a.time/60)+' min</span></div>';
   });
   html += '</div></section></div></div></div>';
   container.innerHTML = html;
@@ -1628,7 +1668,7 @@ function initPlaybackControls() {
     if (!e || e.defaultPrevented || modalStack.length || startupErrorRendered) return;
     var primaryModifier = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
     if (primaryModifier && !isTextEditingShortcutTarget(e.target)) {
-      if (e.repeat && ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'KeyS', 'KeyL', 'KeyQ', 'KeyZ'].includes(e.code)) { e.preventDefault(); return; }
+      if (e.repeat && ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'KeyS', 'KeyL', 'KeyR', 'KeyQ', 'KeyZ'].includes(e.code)) { e.preventDefault(); return; }
       if (e.code === 'ArrowRight') {
         e.preventDefault();
         playNextTrack();
@@ -1650,7 +1690,7 @@ function initPlaybackControls() {
         return;
       }
       if (e.code === 'KeyS') { e.preventDefault(); toggleShuffle(); return; }
-      if (e.code === 'KeyL') { e.preventDefault(); cycleLoop(); return; }
+      if (e.code === 'KeyL' || e.code === 'KeyR') { e.preventDefault(); cycleLoop(); return; }
       if (e.code === 'KeyQ') { e.preventDefault(); toggleQueue(); return; }
       if (e.code === 'KeyZ') { e.preventDefault(); undoLastAction(); return; }
     }
@@ -1711,6 +1751,7 @@ function bootstrap() {
   initLibraryControls();
   initPlaybackDownloadControls();
   initDownloadControls();
+  initLyricsControls();
   initSettingsControls();
   initMetadataControls();
   initPlaybackControls();

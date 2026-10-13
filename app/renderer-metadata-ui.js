@@ -404,6 +404,69 @@ function unloadAudioForMetadataSave(filePaths) {
 
 var ctxEditMeta = null;
 
+function migrateAlbumPreferences(oldAlbumKey, file) {
+  var newAlbumKey = file && getAlbumKey(file);
+  if (!oldAlbumKey || !newAlbumKey || oldAlbumKey === newAlbumKey) return false;
+  var moved = false;
+  ['albumNotes', 'albumRatings', 'likedAlbums'].forEach(function (field) {
+    var values = appSettings[field];
+    if (!values || !Object.prototype.hasOwnProperty.call(values, oldAlbumKey)) return;
+    if (!Object.prototype.hasOwnProperty.call(values, newAlbumKey)) {
+      values[newAlbumKey] = values[oldAlbumKey];
+      delete values[oldAlbumKey];
+      moved = true;
+    }
+  });
+  return moved;
+}
+
+function initializeAlbumRatingStars(container, initialValue) {
+  if (!container) return;
+  var valueLabel = $('library-album-rating-value');
+  var clearButton = $('library-album-rating-clear');
+  var rating = Number(initialValue) || 0;
+  container.replaceChildren();
+  function paint(preview) {
+    var shown = preview === undefined ? rating : preview;
+    container.querySelectorAll('.library-rating-star').forEach(function (button, index) {
+      var amount = Math.max(0, Math.min(1, shown - index));
+      button.querySelector('.library-rating-fill').style.width = Math.round(amount * 100) + '%';
+      button.setAttribute('aria-pressed', rating >= index + 1 ? 'true' : 'false');
+    });
+    if (preview === undefined) {
+      container.dataset.value = rating ? String(rating) : '';
+      container.setAttribute('aria-label', rating ? 'Album rating: ' + rating + ' of 5 stars' : 'Album rating: none');
+      if (valueLabel) valueLabel.textContent = rating ? rating + ' / 5' : 'No rating';
+      if (clearButton) clearButton.disabled = !rating;
+    }
+  }
+  function setRating(next) { rating = Math.max(0, Math.min(5, Math.round(next * 2) / 2)); paint(); }
+  for (var star = 1; star <= 5; star++) {
+    var button = document.createElement('button'); button.type = 'button'; button.className = 'library-rating-star'; button.dataset.star = String(star);
+    button.setAttribute('aria-label', 'Rate ' + star + ' stars; use the left half for ' + (star - 0.5));
+    button.innerHTML = '<i class="ph ph-star" aria-hidden="true"></i><span class="library-rating-fill"><i class="ph-fill ph-star" aria-hidden="true"></i></span>';
+    button.addEventListener('click', function (event) {
+      var rect = event.currentTarget.getBoundingClientRect();
+      var half = event.detail === 0 ? false : event.clientX < rect.left + rect.width / 2;
+      setRating(Number(event.currentTarget.dataset.star) - (half ? 0.5 : 0));
+    });
+    button.addEventListener('mousemove', function (event) {
+      var rect = event.currentTarget.getBoundingClientRect();
+      paint(Number(event.currentTarget.dataset.star) - (event.clientX < rect.left + rect.width / 2 ? 0.5 : 0));
+    });
+    button.addEventListener('mouseleave', function () { paint(); });
+    button.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowRight' || event.key === 'ArrowUp') { event.preventDefault(); setRating(rating + 0.5); }
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') { event.preventDefault(); setRating(rating - 0.5); }
+      else if (event.key === 'Home' || event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); setRating(0); }
+      else if (event.key === 'End') { event.preventDefault(); setRating(5); }
+    });
+    container.appendChild(button);
+  }
+  if (clearButton) clearButton.onclick = function () { setRating(0); };
+  paint();
+}
+
 function openLibraryNoteEditor(scope, target) {
   var modal = $('library-note-modal'); var input = $('library-note-input');
   if (!modal || !input || !target) return;
@@ -411,21 +474,32 @@ function openLibraryNoteEditor(scope, target) {
   if (!key) return;
   var notesKey = isAlbum ? 'albumNotes' : 'trackNotes';
   var notes = appSettings[notesKey] && typeof appSettings[notesKey] === 'object' ? appSettings[notesKey] : {};
-  $('library-note-title').textContent = isAlbum ? 'Edit album note' : 'Edit track note';
+  var ratingField = $('library-album-rating-field'); var ratingInput = $('library-album-rating');
+  var ratings = appSettings.albumRatings && typeof appSettings.albumRatings === 'object' ? appSettings.albumRatings : {};
+  if (ratingField) ratingField.hidden = !isAlbum;
+  if (isAlbum) initializeAlbumRatingStars(ratingInput, ratings[key]);
+  $('library-note-title').textContent = isAlbum ? 'Album review' : 'Edit track note';
   $('library-note-subtitle').textContent = isAlbum ? ((target.name || target.album || 'Unknown album') + ' — ' + (target.artist || target.albumArtist || 'Unknown artist')) : ((target.title || 'Unknown title') + ' — ' + (target.artist || 'Unknown artist'));
   input.value = String(notes[key] || '');
   $('library-note-cancel').onclick = function () { hideModal(modal); };
   modal.onclick = function (event) { if (event.target === modal) hideModal(modal); };
   $('library-note-save').onclick = async function () {
-    var previous = appSettings[notesKey]; var next = Object.assign({}, notes); var value = input.value.trim();
+    var previous = appSettings[notesKey]; var previousRatings = appSettings.albumRatings;
+    var next = Object.assign({}, notes); var value = input.value.trim();
     if (value) next[key] = value; else delete next[key];
+    if (isAlbum) {
+      var updatedRatings = Object.assign({}, ratings);
+      if (ratingInput && ratingInput.dataset.value) updatedRatings[key] = Number(ratingInput.dataset.value);
+      else delete updatedRatings[key];
+      appSettings.albumRatings = updatedRatings;
+    }
     appSettings[notesKey] = next; markLibraryDirty();
     try {
       await persistSettings(appSettings); hideModal(modal);
       if (state.currentView === 'search') { var search = $('global-search'); if (search) search.dispatchEvent(new Event('input')); }
-      showToast(value ? 'Note saved.' : 'Note removed.');
+      showToast(isAlbum ? 'Album review saved.' : (value ? 'Note saved.' : 'Note removed.'));
     } catch (error) {
-      appSettings[notesKey] = previous; markLibraryDirty();
+      appSettings[notesKey] = previous; appSettings.albumRatings = previousRatings; markLibraryDirty();
       showToast('The note could not be saved. Check disk space and permissions.');
     }
   };
@@ -1392,6 +1466,8 @@ function initMetadataControls() {
     var libraryChanged = false;
     var libraryPersistAttempted = false;
     var libraryPersisted = false;
+    var playlistSyncUpdated = 0;
+    var playlistSyncWarning = '';
     function setMetadataSaveBusy(busy) {
       metaSaveInProgress = busy;
       btn.disabled = busy;
@@ -1410,6 +1486,7 @@ function initMetadataControls() {
       restorePlaybackAfterMetadataSave = null;
       restore();
     }
+    var albumPreferencesChanged = false;
     async function persistChangedMetadata() {
       if (!libraryChanged) return true;
       if (libraryPersistAttempted) return libraryPersisted;
@@ -1599,6 +1676,7 @@ function initMetadataControls() {
         }
         f = latestFile;
         targetFiles[i] = f;
+        var previousAlbumKey = getAlbumKey(f);
         if (tags.title) f.title = tags.title;
         if (tags.artist) f.artist = tags.artist;
         if (tags.performerInfo) f.albumArtist = tags.performerInfo;
@@ -1617,12 +1695,14 @@ function initMetadataControls() {
           var manualMismatch = metadataWriteMismatch(appliedMetadata, tagsForThisFile);
           if (manualMismatch) { libraryChanged = true; await failMetadataSave('Metadata verification failed for ' + (f.filename || fp) + '. ' + manualMismatch); return; }
         }
+        if (migrateAlbumPreferences(previousAlbumKey, f)) albumPreferencesChanged = true;
 
         var pct = Math.round(((i + 1) / targetFiles.length) * 100);
         $('meta-save-bar').style.width = pct + '%';
         $('meta-save-text').textContent = 'Saved ' + (i + 1) + '/' + targetFiles.length + ': ' + (f.filename || f.title || fp);
       }
       if (!(await persistChangedMetadata())) { await failMetadataSave('Audio tags were saved, but the library index could not be updated.'); return; }
+      if (albumPreferencesChanged) await persistSettings(appSettings);
 
       } else {
       // Read checkboxes
@@ -1732,6 +1812,7 @@ function initMetadataControls() {
         }
         f = latestFile;
         targetFiles[i] = f;
+        var previousAlbumKeyAuto = getAlbumKey(f);
 
         if (t.title) f.title = t.title;
         if (t.artist) f.artist = t.artist;
@@ -1752,19 +1833,34 @@ function initMetadataControls() {
           var autoMismatch = metadataWriteMismatch(appliedMetadata, t);
           if (autoMismatch) { libraryChanged = true; await failMetadataSave('Metadata verification failed for ' + (f.filename || fp) + '. ' + autoMismatch); return; }
         }
+        if (migrateAlbumPreferences(previousAlbumKeyAuto, f)) albumPreferencesChanged = true;
 
         var pct = Math.round(((i + 1) / targetFiles.length) * 100);
         $('meta-save-bar').style.width = pct + '%';
         $('meta-save-text').textContent = 'Saved ' + (i + 1) + '/' + targetFiles.length + ': ' + (f.filename || f.title || fp);
       }
       if (!(await persistChangedMetadata())) { await failMetadataSave('Audio tags were saved, but the library index could not be updated.'); return; }
+      if (albumPreferencesChanged) await persistSettings(appSettings);
+      }
+
+      var playlistSync = syncPlaylistTrackDetailsFromLibrary(targetFiles);
+      playlistSyncUpdated = playlistSync.updated;
+      if (playlistSyncUpdated) {
+        try {
+          await persistPlaylists(state.playlists);
+        } catch (e) {
+          console.error('Failed to save playlist metadata updates:', e);
+          revertPlaylistTrackDetailsSync(playlistSync);
+          playlistSyncUpdated = 0;
+          playlistSyncWarning = ' Playlist details could not be saved; check disk space and permissions.';
+        }
       }
 
       if ($('meta-save-progress')) $('meta-save-progress').remove();
       btn.style.display = '';
       btn.textContent = 'Saved!';
       restoreMetadataPlaybackIfNeeded();
-      showToast('Metadata written to ' + changedFileCount + ' file' + (changedFileCount === 1 ? '' : 's') + '.' + (metadataReadWarnings.length ? ' Could not reread ' + metadataReadWarnings.length + '; the library index kept the values that were written.' : ''), { duration: metadataReadWarnings.length ? 8000 : 3600 });
+      showToast('Metadata written to ' + changedFileCount + ' file' + (changedFileCount === 1 ? '' : 's') + '.' + (playlistSyncUpdated ? ' Updated ' + playlistSyncUpdated + ' playlist entr' + (playlistSyncUpdated === 1 ? 'y' : 'ies') + '.' : '') + (metadataReadWarnings.length ? ' Could not reread ' + metadataReadWarnings.length + '; the library index kept the values that were written.' : '') + playlistSyncWarning, { duration: (metadataReadWarnings.length || playlistSyncWarning) ? 8000 : 3600 });
       setTimeout(function () {
         btn.textContent = 'Save';
         setMetadataSaveBusy(false);

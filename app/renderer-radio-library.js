@@ -982,20 +982,92 @@ function renderHomeDashboard() {
 
   // Last.fm Recommendations
   var btnRefLfm = $('btn-refresh-lastfm');
+  var controls = $('lastfm-recommendation-controls');
+  var prefs = Object.assign({ mode: 'recent', genres: [], artists: [] }, appSettings.lastfmRecommendationPrefs || {});
+  if (!Array.isArray(prefs.artists) || (!prefs.artists.length && prefs.artist)) prefs.artists = prefs.artist ? [prefs.artist] : [];
   if (appSettings.lastfmConnected) {
     lfTxt.textContent = 'Connected as ' + appSettings.lastfmUsername;
     recEmpty.style.display = 'none';
+    if (controls) controls.hidden = false;
+    var modeSelect = $('lastfm-recommendation-mode');
+    var picker = $('lastfm-recommendation-picker');
+    var pickerLabel = $('lastfm-recommendation-picker-label');
+    var choiceSearch = $('lastfm-recommendation-search');
+    var choiceOptions = $('lastfm-recommendation-options');
+    var choiceCount = $('lastfm-recommendation-selection-count');
+    if (modeSelect) modeSelect.value = prefs.mode;
+    function selectedChoices() { return prefs.mode === 'genres' ? prefs.genres : prefs.artists; }
+    function updatePicker() {
+      if (!picker) return;
+      picker.hidden = prefs.mode === 'recent';
+      if (picker.hidden) picker.open = false;
+      if (pickerLabel) pickerLabel.textContent = prefs.mode === 'genres' ? 'Choose genres' : 'Choose artists';
+      if (choiceSearch) choiceSearch.placeholder = prefs.mode === 'genres' ? 'Find a genre' : 'Find or add an artist';
+      if (choiceCount) choiceCount.textContent = selectedChoices().length + ' of 5 selected';
+      renderRecommendationChoices();
+    }
+    function renderRecommendationChoices() {
+      if (!choiceOptions || prefs.mode === 'recent') return;
+      var chosen = selectedChoices();
+      var options = prefs.mode === 'genres' ? (state.lastfmRecommendationGenres || []) : (state.lastfmRecentArtists || []);
+      var query = choiceSearch ? choiceSearch.value.trim().toLocaleLowerCase() : '';
+      var rows = chosen.map(function (id) { return { id: id, label: options.find(function (item) { return item.id === id; })?.label || id }; });
+      options.forEach(function (item) { if (!rows.some(function (row) { return row.id === item.id; })) rows.push(item); });
+      choiceOptions.replaceChildren();
+      if (!rows.length && !query) { var waiting = document.createElement('p'); waiting.className = 'recommendation-picker-state'; waiting.textContent = prefs.mode === 'artist' ? 'Loading your recent artists…' : 'Loading genres…'; choiceOptions.appendChild(waiting); }
+      rows.filter(function (row) { return !query || row.label.toLocaleLowerCase().includes(query); }).forEach(function (row) {
+        var label = document.createElement('label'); label.className = 'recommendation-choice';
+        var checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = chosen.includes(row.id);
+        checkbox.addEventListener('change', function () {
+          var next = selectedChoices().slice();
+          if (checkbox.checked && next.length >= 5) { checkbox.checked = false; showToast('Choose up to five.'); return; }
+          if (checkbox.checked) next.push(row.id); else next = next.filter(function (id) { return id !== row.id; });
+          if (prefs.mode === 'genres') prefs.genres = next; else prefs.artists = next;
+          saveRecommendationPrefs(); updatePicker();
+        });
+        label.appendChild(checkbox); label.appendChild(document.createTextNode(row.label)); choiceOptions.appendChild(label);
+      });
+      if (prefs.mode === 'artist' && query && !rows.some(function (row) { return row.label.toLocaleLowerCase() === query; })) {
+        var add = document.createElement('button'); add.type = 'button'; add.className = 'recommendation-add-artist'; add.textContent = 'Add “' + choiceSearch.value.trim() + '”';
+        add.onclick = function () { if (prefs.artists.length >= 5) { showToast('Choose up to five artists.'); return; } prefs.artists.push(choiceSearch.value.trim()); choiceSearch.value = ''; saveRecommendationPrefs(); updatePicker(); };
+        choiceOptions.appendChild(add);
+      }
+    }
+    function saveRecommendationPrefs() {
+      appSettings.lastfmRecommendationPrefs = { mode: prefs.mode, genres: prefs.genres.slice(0, 5), artists: prefs.artists.slice(0, 5) };
+      state.lastfmRecsCache = null; loadRecommendations(true);
+      persistSettings(appSettings).catch(function () { showToast('Could not save recommendation preferences.'); });
+    }
+    if (modeSelect) modeSelect.onchange = function () { prefs.mode = modeSelect.value; if (choiceSearch) choiceSearch.value = ''; updatePicker(); saveRecommendationPrefs(); };
+    if (choiceSearch) { choiceSearch.oninput = renderRecommendationChoices; choiceSearch.onkeydown = function (event) { if (event.key === 'Enter') { event.preventDefault(); var add = choiceOptions && choiceOptions.querySelector('.recommendation-add-artist'); if (add) add.click(); } }; }
+    updatePicker();
+    if (!state.lastfmRecentArtists) window.api.getLastfmRecentArtists().then(function (artists) {
+      state.lastfmRecentArtists = (artists || []).map(function (artist) { return { id: artist, label: artist }; });
+      if (renderGeneration === homeRenderGeneration) { updatePicker(); if (prefs.mode === 'artist') loadRecommendations(true); }
+    }).catch(function () { state.lastfmRecentArtists = []; if (renderGeneration === homeRenderGeneration) updatePicker(); });
+    if (!state.lastfmRecommendationGenres) {
+      var provider = getRadioProvider('lastfm');
+      if (provider) provider.listGenres(getRadioProviderContext()).then(function (genres) {
+        state.lastfmRecommendationGenres = genres || [];
+        if (renderGeneration === homeRenderGeneration) updatePicker();
+      }).catch(function () { if (choiceOptions && prefs.mode === 'genres') choiceOptions.textContent = 'Genres could not be loaded. Refresh to retry.'; });
+    }
     if (btnRefLfm) {
       btnRefLfm.style.display = 'flex';
-      btnRefLfm.onclick = function() { state.lastfmRecsCache = null; renderHomeDashboard(); };
+      btnRefLfm.onclick = function() { loadRecommendations(true); };
     }
 
-    function renderRecs(recs) {
-      recGrid.innerHTML = '';
-      if (!recs || recs.length === 0) {
-        recGrid.innerHTML = '<div class="home-recommendations-empty home-recommendations-inline">No recommendations found yet. Listen to more tracks to help Last.fm learn your taste.</div>';
+    function renderRecs(groups) {
+      recGrid.replaceChildren();
+      if (!groups || !groups.length) {
+        recGrid.innerHTML = '<div class="home-recommendations-empty home-recommendations-inline">No recommendations found for these choices. Refresh or choose another source.</div>';
       } else {
-        recs.forEach(function (r) {
+        groups.forEach(function (group) {
+          var section = document.createElement('section'); section.className = 'recommendation-source-group';
+          var heading = document.createElement('h3'); heading.textContent = group.label; section.appendChild(heading);
+          var grid = document.createElement('div'); grid.className = 'albums-grid recommendation-source-grid'; section.appendChild(grid);
+          if (!group.items.length) { var empty = document.createElement('p'); empty.className = 'home-shelf-empty'; empty.textContent = 'No albums found for this source.'; section.appendChild(empty); }
+          group.items.forEach(function (r) {
           var card = document.createElement('button'); card.type = 'button'; card.className = 'album-card recommendation-card';
           card.setAttribute('aria-label', 'Search YouTube for ' + r.artist + ' ' + r.name);
           var lazy = appSettings.lazyLoading ? ' loading="lazy"' : '';
@@ -1004,30 +1076,68 @@ function renderHomeDashboard() {
           card.addEventListener('click', function () {
             window.api.openExternal('https://www.youtube.com/results?search_query=' + encodeURIComponent(r.artist + ' ' + r.name));
           });
-          recGrid.appendChild(card);
+          grid.appendChild(card);
+        });
+          recGrid.appendChild(section);
         });
       }
     }
 
-    if (state.lastfmRecsCache && state.lastfmRecsCacheTime && (Date.now() - state.lastfmRecsCacheTime < 3600000)) {
-      renderRecs(state.lastfmRecsCache);
-    } else {
+    function loadRecommendations(force) {
+      var requestId = (state.lastfmRecommendationRequestId || 0) + 1; state.lastfmRecommendationRequestId = requestId;
+      var sources = [];
+      if (prefs.mode === 'genres') sources = (prefs.genres || []).slice(0, 5).map(function (genre) {
+        var catalog = state.lastfmRecommendationGenres || [];
+        var match = catalog.find(function (item) { return item.id === genre; });
+        return { label: match ? match.label : genre, request: { mode: 'genres', genres: [genre] } };
+      });
+      else if (prefs.mode === 'artist') {
+        var selected = (prefs.artists || []).slice(0, 5);
+        var recent = (state.lastfmRecentArtists || []).map(function (item) { return item.id; });
+        recent.forEach(function (artist) { if (selected.length < 5 && !selected.some(function (value) { return value.toLocaleLowerCase() === artist.toLocaleLowerCase(); })) selected.push(artist); });
+        sources = selected.map(function (artist) { return { label: 'Similar to ' + artist, request: { mode: 'artist', artist: artist } }; });
+      } else sources = [{ label: 'From your listening', request: { mode: 'recent' } }];
+      var cacheKey = JSON.stringify({ mode: prefs.mode, sources: sources.map(function (source) { return source.request; }) });
+      if (!force && state.lastfmRecsCache && state.lastfmRecsCacheKey === cacheKey && state.lastfmRecsCacheTime && (Date.now() - state.lastfmRecsCacheTime < 3600000)) {
+        renderRecs(state.lastfmRecsCache);
+        return;
+      }
+      if (!sources.length) { recGrid.innerHTML = '<div class="home-recommendations-state">' + (prefs.mode === 'genres' ? 'Choose at least one genre.' : 'Select an artist or wait for your recent artists to load.') + '</div>'; return; }
       recGrid.innerHTML = '<div class="home-recommendations-state"><i class="ph ph-spinner ph-spin" aria-hidden="true"></i><p>Fetching personalized recommendations...</p></div>';
-      window.api.getLastfmRecommendations().then(function (recs) {
+      Promise.all(sources.map(function (source) { return window.api.getLastfmRecommendations(Object.assign({}, source.request, { refresh: !!force })); })).then(function (results) {
+        if (requestId !== state.lastfmRecommendationRequestId) return;
         if (renderGeneration !== homeRenderGeneration || state.currentView !== 'home' || !state.musicFiles.length || !appSettings.lastfmConnected) return;
-        state.lastfmRecsCache = recs;
+        var errors = results.filter(function (result) { return result && result.error; });
+        if (errors.length === results.length) throw new Error(errors[0].error);
+        var seen = state.lastfmSeenRecs || (state.lastfmSeenRecs = []);
+        var groups = results.map(function (result, index) {
+          var items = result && Array.isArray(result.items) ? result.items : [];
+          var localSeen = new Set();
+          var distinct = items.filter(function (item) { if (!item || !item.artist || !item.name) return false; var id = (item.artist + '::' + item.name).toLowerCase(); if (localSeen.has(id) || seen.includes(id)) return false; localSeen.add(id); return true; });
+          if (!distinct.length && items.length) { localSeen.clear(); distinct = items.filter(function (item) { if (!item || !item.artist || !item.name) return false; var id = (item.artist + '::' + item.name).toLowerCase(); if (localSeen.has(id)) return false; localSeen.add(id); return true; }); }
+          distinct = distinct.slice(0, prefs.mode === 'recent' ? 12 : 5);
+          distinct.forEach(function (item) { seen.push((item.artist + '::' + item.name).toLowerCase()); });
+          return { label: prefs.mode === 'recent' && result.seed ? 'From ' + result.seed : sources[index].label, items: distinct };
+        });
+        state.lastfmSeenRecs = seen.slice(-120);
+        state.lastfmRecsCache = groups;
+        state.lastfmRecsCacheKey = cacheKey;
         state.lastfmRecsCacheTime = Date.now();
-        renderRecs(recs);
+        renderRecs(groups);
       }).catch(function (err) {
+        if (requestId !== state.lastfmRecommendationRequestId) return;
         if (renderGeneration !== homeRenderGeneration || state.currentView !== 'home' || !state.musicFiles.length) return;
-        recGrid.innerHTML = '<div class="home-recommendations-state error">Recommendations could not be loaded. Try refreshing this section.</div>';
+        recGrid.innerHTML = '<div class="home-recommendations-state error">' + esc(err && err.message || 'Recommendations could not be loaded.') + ' <button type="button" class="btn btn-outline" id="lastfm-retry">Retry</button></div>';
+        var retry = $('lastfm-retry'); if (retry) retry.onclick = function () { loadRecommendations(true); };
       });
     }
+    loadRecommendations(false);
   } else {
     lfTxt.textContent = 'Not connected';
     recEmpty.style.display = 'grid';
     recGrid.innerHTML = '';
     if (btnRefLfm) btnRefLfm.style.display = 'none';
+    if (controls) controls.hidden = true;
   }
 }
 

@@ -2,6 +2,27 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.5 — 2026-10-13
+
+### Added
+
+- Added half-star album ratings, album likes, and album review controls, with preferences retained when album metadata changes.
+- Expanded library search with field, file, missing-cover, like, and album-rating filters, plus shortcut and search help.
+- Added a dated Last listened view and per-source play counts, listening time, and date ranges for local and streamed tracks.
+- Saved personal synced or plain lyrics for the current track and added retry and web-search actions.
+- Added Last.fm recommendation modes based on recent listening, selected genres, or selected artists.
+
+### Changed
+
+- Moved the lyrics engine and controls into a dedicated renderer slice.
+- Updated `csv-parse` and `music-metadata` to audited releases.
+
+### Fixed
+
+- Corrected repeat shortcut handling and made both Ctrl/Cmd+L and Ctrl/Cmd+R cycle repeat.
+- Kept playlist track details, album preferences, and listening history consistent after library metadata changes.
+- Fixed related playback, download, and Linux desktop installation edge cases.
+
 ## 0.1.4 — 2026-08-28
 
 ### Added

@@ -24,6 +24,15 @@ test('source statistics merge identity upgrades without losing either source', (
 
 test('invalid persisted source values are bounded to non-negative numbers', () => {
   assert.deepEqual(sources.normalize({ local: { count: -2, time: 'bad' }, remote: { count: 4, time: 9 } }), {
-    local: { count: 0, time: 0 }, remote: { count: 4, time: 9 }
+    local: { count: 0, time: 0, firstPlayedAt: '', lastPlayedAt: '' },
+    remote: { count: 4, time: 9, firstPlayedAt: '', lastPlayedAt: '' }
   });
+});
+
+test('source dates survive normalization and identity merge', () => {
+  const target = { sources: { local: { count: 1, time: 20, firstPlayedAt: '2026-10-12T00:00:00.000Z', lastPlayedAt: '2026-10-12T00:00:00.000Z' } } };
+  sources.merge(target, { sources: { local: { count: 1, time: 30, firstPlayedAt: '2026-10-11T00:00:00.000Z', lastPlayedAt: '2026-10-13T00:00:00.000Z' } } });
+  assert.deepEqual(sources.values(target, 'local'), { count: 2, time: 50 });
+  assert.equal(target.sources.local.firstPlayedAt, '2026-10-11T00:00:00.000Z');
+  assert.equal(target.sources.local.lastPlayedAt, '2026-10-13T00:00:00.000Z');
 });

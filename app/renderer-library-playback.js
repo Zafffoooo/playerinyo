@@ -1547,6 +1547,7 @@ async function analyzeTrackLoudness(file) {
   var gainDb = Math.max(-18, Math.min(18, targetDb - rmsDb));
   file.replayGainTrackDb = gainDb;
   file.replayGainTrackPeak = peak || null;
+  file.replayGainMethod = 'approx-rms';
   return { gainDb: gainDb, peak: peak };
 }
 

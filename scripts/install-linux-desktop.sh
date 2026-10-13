@@ -41,11 +41,11 @@ desktop_contents=$(<"$DESKTOP_SOURCE")
 desktop_contents=${desktop_contents/Icon=$APP_ID/Icon=$desktop_icon}
 
 if [[ -x "$PACKAGE_BINARY" ]]; then
+  # Replace the whole package as one versioned unit. Copying over an existing
+  # Electron install can leave its executable from a different Electron/V8
+  # release alongside a new app.asar, which prevents the app from launching.
+  rm -rf "$INSTALL_DIR"
   mkdir -p "$INSTALL_DIR"
-  # Electron prefers app.asar. A prior non-ASAR install may still leave a
-  # loose resources/app tree behind; remove that package-owned stale tree so
-  # it cannot confuse icon/resource inspection after an upgrade.
-  rm -rf "$INSTALL_DIR/resources/app"
   cp -a "$PACKAGE_DIR/." "$INSTALL_DIR/"
   desktop_exec=${INSTALL_BINARY//\\/\\\\}
   desktop_exec=${desktop_exec//\"/\\\"}

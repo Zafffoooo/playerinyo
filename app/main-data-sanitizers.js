@@ -386,17 +386,59 @@ function sanitizeImportedSettings(settings) {
         title: boundedBackupString(value.title || '', `listeningStats.${index}.title`, 1000),
         artist: boundedBackupString(value.artist || '', `listeningStats.${index}.artist`, 1000),
         album: boundedBackupString(value.album || '', `listeningStats.${index}.album`, 1000),
+        albumArtist: boundedBackupString(value.albumArtist || '', `listeningStats.${index}.albumArtist`, 1000),
         picture: boundedBackupString(value.picture || '', `listeningStats.${index}.picture`, 16384),
         trackMbid: boundedBackupString(value.trackMbid || '', `listeningStats.${index}.trackMbid`, 80),
         nameKey: boundedBackupString(value.nameKey || '', `listeningStats.${index}.nameKey`, 1200),
         filePath: boundedBackupString(value.filePath || '', `listeningStats.${index}.filePath`, 4096),
+        firstPlayedAt: boundedBackupString(value.firstPlayedAt || '', `listeningStats.${index}.firstPlayedAt`, 40),
+        lastPlayedAt: boundedBackupString(value.lastPlayedAt || '', `listeningStats.${index}.lastPlayedAt`, 40),
       };
+      if (isPlainObject(value.sources)) {
+        const sources = {};
+        for (const source of ['local', 'remote']) {
+          const row = isPlainObject(value.sources[source]) ? value.sources[source] : {};
+          sources[source] = {
+            count: boundedBackupNumber(row.count || 0, `listeningStats.${index}.sources.${source}.count`, 0, 1000000000, true),
+            time: boundedBackupNumber(row.time || 0, `listeningStats.${index}.sources.${source}.time`, 0, 1000000000000),
+            firstPlayedAt: boundedBackupString(row.firstPlayedAt || '', `listeningStats.${index}.sources.${source}.firstPlayedAt`, 40),
+            lastPlayedAt: boundedBackupString(row.lastPlayedAt || '', `listeningStats.${index}.sources.${source}.lastPlayedAt`, 40),
+          };
+        }
+        stats[identity].sources = sources;
+      }
     });
     next.listeningStats = stats;
   }
   if (Object.prototype.hasOwnProperty.call(settings, 'customSmartPlaylists')) next.customSmartPlaylists = sanitizeCustomSmartPlaylists(settings.customSmartPlaylists);
   if (Object.prototype.hasOwnProperty.call(settings, 'trackNotes')) next.trackNotes = sanitizeStringMap(settings.trackNotes, 'trackNotes', MAX_LIBRARY_TRACKS, 4096, 2000);
   if (Object.prototype.hasOwnProperty.call(settings, 'albumNotes')) next.albumNotes = sanitizeStringMap(settings.albumNotes, 'albumNotes', 100000, 2000, 2000);
+  if (Object.prototype.hasOwnProperty.call(settings, 'albumRatings')) {
+    if (!isPlainObject(settings.albumRatings)) backupSettingError('albumRatings', 'must be an object');
+    const ratings = {};
+    Object.entries(settings.albumRatings).slice(0, 100000).forEach(([key, value]) => {
+      const rating = Number(value);
+      if (key && key.length <= 2000 && Number.isFinite(rating) && rating >= 0.5 && rating <= 5 && Math.round(rating * 2) === rating * 2) ratings[key] = rating;
+    });
+    next.albumRatings = ratings;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'likedAlbums')) {
+    if (!isPlainObject(settings.likedAlbums)) backupSettingError('likedAlbums', 'must be an object');
+    const likedAlbums = {};
+    Object.entries(settings.likedAlbums).slice(0, 100000).forEach(([key, value]) => { if (key && key.length <= 2000 && value === true) likedAlbums[key] = true; });
+    next.likedAlbums = likedAlbums;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'customLyrics')) next.customLyrics = sanitizeStringMap(settings.customLyrics, 'customLyrics', 100000, 100000, 2000);
+  if (Object.prototype.hasOwnProperty.call(settings, 'lastfmRecommendationPrefs')) {
+    const prefs = settings.lastfmRecommendationPrefs;
+    if (!isPlainObject(prefs)) backupSettingError('lastfmRecommendationPrefs', 'must be an object');
+    next.lastfmRecommendationPrefs = {
+      mode: ['recent', 'genres', 'artist'].includes(prefs.mode) ? prefs.mode : 'recent',
+      genres: Array.isArray(prefs.genres) ? Array.from(new Set(prefs.genres.slice(0, 5).map(value => boundedBackupString(value, 'lastfmRecommendationPrefs.genres', 200, false)))) : [],
+      artist: boundedBackupString(prefs.artist || '', 'lastfmRecommendationPrefs.artist', 500),
+      artists: Array.isArray(prefs.artists) ? Array.from(new Set(prefs.artists.slice(0, 5).map(value => boundedBackupString(value, 'lastfmRecommendationPrefs.artists', 500, false)))) : [],
+    };
+  }
   if (Object.prototype.hasOwnProperty.call(settings, 'radioPreferences')) next.radioPreferences = sanitizeRadioPreferencesForSettings(settings.radioPreferences);
   if (Object.prototype.hasOwnProperty.call(settings, 'radioBlocklist')) next.radioBlocklist = sanitizeRadioBlocklistForSettings(settings.radioBlocklist);
   return next;

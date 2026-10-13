@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: file: https:; media-src 'self' file: blob: playerinyo-stream:; connect-src 'self' https://musicbrainz.org https://ws.audioscrobbler.com https://lrclib.net; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: file: https:; media-src 'self' file: blob: playerinyo-stream:; connect-src 'self' https://musicbrainz.org https://ws.audioscrobbler.com https://lrclib.net https://api.lyrics.ovh; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none';">
   <title>Playerinyo</title>
   <link rel="icon" href="../assets/icon.png" type="image/png">
   <link rel="stylesheet" href="style.css">
@@ -74,7 +74,7 @@
         </div>
         <div class="dock-recent-playlists" id="dock-recent-playlists" aria-label="Playlists, recent first" hidden></div>
         <div class="dock-utilities" aria-label="Application tools">
-          <button class="nav-item dock-tool" id="btn-shortcuts-help" title="Keyboard shortcuts and help" aria-label="Keyboard shortcuts and help"><i class="ph ph-question" aria-hidden="true"></i><span>Shortcuts</span></button>
+          <button class="nav-item dock-tool" id="btn-shortcuts-help" title="Shortcuts and search help" aria-label="Shortcuts and search help"><i class="ph ph-question" aria-hidden="true"></i></button>
           <button class="nav-item dock-tool" id="btn-settings" title="Settings" aria-label="Open settings"><i class="ph ph-gear" aria-hidden="true"></i><span>Settings</span></button>
         </div>
       </nav>
@@ -92,7 +92,7 @@
               <input type="search" id="global-search" placeholder="Search your collection" aria-label="Search your collection" aria-describedby="global-search-help"
                 autocomplete="off" />
               <button type="button" class="global-search-clear" id="global-search-clear" aria-label="Clear search" hidden><i class="ph ph-x" aria-hidden="true"></i></button>
-              <span class="sr-only" id="global-search-help">Search tracks, albums, and artists. Filters such as artist, genre, year, and missing cover are supported.</span>
+              <span class="sr-only" id="global-search-help">Search tracks, albums, and artists. Filters: artist:, album:, title: or song:, genre:, year:, missing:cover, rg:missing, type: or ext:, path:, liked:true, albumrating:10 (rating is measured from 0 to 10), albums:liked.</span>
             </div>
           </div>
           <div class="header-right main-header-actions">
@@ -253,7 +253,12 @@
                   <h2 id="recommended-heading"><i class="ph-fill ph-lastfm-logo" aria-hidden="true"></i> Recommended for you</h2>
                   <p id="lastfm-status-text">Not connected</p>
                 </div>
+                <div class="home-recommendation-actions"><div class="home-recommendation-controls" id="lastfm-recommendation-controls" hidden>
+                  <select id="lastfm-recommendation-mode" aria-label="Recommendation mode"><option value="recent">Your listening</option><option value="genres">Genres</option><option value="artist">Similar artists</option></select>
+                  <details id="lastfm-recommendation-picker" hidden><summary id="lastfm-recommendation-picker-label">Choose artists</summary><div class="recommendation-picker-menu"><label class="recommendation-picker-search"><span class="sr-only">Find an artist or genre</span><input id="lastfm-recommendation-search" type="search" placeholder="Find or add an artist"></label><div id="lastfm-recommendation-options" role="group" aria-label="Recommendation choices"></div><small id="lastfm-recommendation-selection-count">0 of 5 selected</small></div></details>
+                </div>
                 <button class="icon-btn ghost home-shelf-refresh" id="btn-refresh-lastfm" title="Refresh recommendations" aria-label="Refresh recommendations" style="display:none;"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+                </div>
               </div>
               <div class="albums-grid" id="home-recommendations"></div>
               <div id="home-recommendations-empty" class="home-recommendations-empty">
@@ -423,6 +428,9 @@
                   <span id="lyrics-offset-val">0.0s</span>
                   <button class="icon-btn" id="btn-lyrics-offset-up" title="Lyrics +0.5s">+</button>
                   <button class="icon-btn" id="btn-lyrics-load-file" title="Load .lrc file"><i class="ph ph-file-text" aria-hidden="true"></i></button>
+                  <button class="icon-btn" id="btn-lyrics-paste" title="Paste lyrics" aria-label="Paste lyrics"><i class="ph ph-clipboard-text" aria-hidden="true"></i></button>
+                  <button class="icon-btn" id="btn-lyrics-retry" title="Retry lyrics search" aria-label="Retry lyrics search"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+                  <button class="icon-btn" id="btn-lyrics-web-search" title="Search lyrics on the web" aria-label="Search lyrics on the web"><i class="ph ph-globe" aria-hidden="true"></i></button>
                   <button class="icon-btn" id="btn-close-lyrics" aria-label="Close lyrics"><i class="ph ph-x" aria-hidden="true"></i></button>
                 </div>
               </div>
@@ -729,7 +737,7 @@
       <div class="setting-item" style="margin-bottom:12px;">
         <div>
           <label for="setting-normalization">Loudness Normalization</label>
-          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Uses ReplayGain when available, with a soft compressor fallback</div>
+          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Uses stored approximate RMS loudness analysis when available, with a soft compressor fallback. Analysis stays in the app library and does not edit audio tags.</div>
         </div>
         <input type="checkbox" class="setting-switch" id="setting-normalization" />
       </div>
@@ -1038,7 +1046,7 @@
   </div>
 
   <div id="library-note-modal" class="modal-overlay" aria-labelledby="library-note-title">
-    <div class="modal-content library-note-editor" style="width:440px;max-width:calc(100vw - 32px);"><h2 id="library-note-title">Edit note</h2><p id="library-note-subtitle" style="color:var(--text-subdued);margin:8px 0 14px;"></p><textarea id="library-note-input" maxlength="2000" rows="7" style="width:100%;resize:vertical;"></textarea><div style="display:flex;gap:10px;margin-top:18px;"><button class="btn btn-outline" id="library-note-cancel">Cancel</button><button class="btn btn-primary" id="library-note-save">Save note</button></div></div>
+    <div class="modal-content library-note-editor" style="width:440px;max-width:calc(100vw - 32px);"><h2 id="library-note-title">Edit note</h2><p id="library-note-subtitle" style="color:var(--text-subdued);margin:8px 0 14px;"></p><div id="library-album-rating-field"><span class="library-review-label">My rating</span><div class="library-rating-control"><div id="library-album-rating" class="library-rating-stars" role="group" aria-label="Album rating, half-star steps"></div><span id="library-album-rating-value" aria-live="polite">No rating</span><button type="button" class="text-link" id="library-album-rating-clear">Clear</button></div><small>Click the left or right half of a star for half or whole points.</small></div><label for="library-note-input">My note</label><textarea id="library-note-input" maxlength="2000" rows="7" style="width:100%;resize:vertical;"></textarea><div style="display:flex;gap:10px;margin-top:18px;"><button class="btn btn-outline" id="library-note-cancel">Cancel</button><button class="btn btn-primary" id="library-note-save">Save</button></div></div>
   </div>
 
   <!-- Create Playlist Modal -->
@@ -1076,7 +1084,8 @@
     <button type="button" class="menu-item" id="actx-play-next" role="menuitem"><i class="ph ph-skip-forward"></i> Play Next</button>
     <button type="button" class="menu-item" id="actx-add-queue" role="menuitem"><i class="ph ph-queue"></i> Add to Queue</button>
     <button type="button" class="menu-item" id="actx-edit-metadata" role="menuitem"><i class="ph ph-pencil-simple"></i> Edit Album Metadata</button>
-    <button type="button" class="menu-item" id="actx-edit-note" role="menuitem"><i class="ph ph-note-pencil"></i> Edit Album Note</button>
+    <button type="button" class="menu-item" id="actx-edit-note" role="menuitem"><i class="ph ph-note-pencil"></i> Album Rating &amp; Note…</button>
+    <button type="button" class="menu-item" id="actx-like-album" role="menuitem"><i class="ph ph-heart"></i> Like Album</button>
     <button type="button" class="menu-item" id="actx-analyze-loudness" role="menuitem"><i class="ph ph-waveform"></i> Analyze Loudness</button>
     <button type="button" class="menu-item" id="actx-split-disc" role="menuitem"><i class="ph ph-vinyl-record"></i> Split by Disc</button>
     <button type="button" class="menu-item" id="actx-open-folder" role="menuitem"><i class="ph ph-folder-open"></i> Open File Location</button>
@@ -1414,6 +1423,7 @@
   <script src="renderer-library-playback.js"></script>
   <script src="renderer-playback-downloads.js"></script>
   <script src="renderer-downloads-ui.js"></script>
+  <script src="renderer-lyrics.js"></script>
   <script src="renderer-settings-ui.js"></script>
   <script src="renderer-metadata-ui.js"></script>
   <script src="renderer-playback-ui.js"></script>

@@ -902,19 +902,20 @@ function updateReplayGainStatus(track) {
   if (!chip) return;
   var file = track && track.matchedFile;
   if (!file) {
-    chip.textContent = 'RG idle';
+    chip.textContent = 'RMS idle';
     chip.className = 'replaygain-chip missing';
     return;
   }
   var db = typeof file.replayGainTrackDb === 'number' ? file.replayGainTrackDb : file.replayGainAlbumDb;
   if (typeof db !== 'number' || isNaN(db)) {
-    chip.textContent = 'RG missing';
-    chip.title = 'ReplayGain is missing. Use Tag Health or Ctrl+K to analyze loudness.';
+    chip.textContent = 'RMS missing';
+    chip.title = 'No loudness value is available. Analyze approximate RMS loudness in the library.';
     chip.className = 'replaygain-chip missing';
     return;
   }
-  chip.textContent = 'RG ' + (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
-  chip.title = appSettings.normalization ? 'ReplayGain normalization is active' : 'ReplayGain data is available; normalization is off';
+  var approximate = file.replayGainMethod === 'approx-rms';
+  chip.textContent = (approximate ? 'RMS ' : 'RG ') + (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
+  chip.title = approximate ? 'Approximate RMS analysis stored in the app library; audio tags are unchanged.' : (appSettings.normalization ? 'ReplayGain tag normalization is active' : 'ReplayGain tag data is available; normalization is off');
   chip.className = 'replaygain-chip' + (appSettings.normalization ? ' active' : '');
 }
 

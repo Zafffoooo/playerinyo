@@ -186,7 +186,7 @@ const MAX_LIBRARY_TRACKS = 250000;
 const MAX_PLAYLISTS = 10000;
 const MAX_PLAYLIST_TRACKS = 250000;
 const PLAYLIST_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
-const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm']);
+const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm', 'www.google.com']);
 const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lastfm.freetls.fastly.net']);
 const APP_ENTRY_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
 const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinyo/releases/latest';
@@ -662,6 +662,7 @@ function validateBackupLibrary(library) {
     validateBackupStringField(track, 'albumArtist', key, 2000, { nullable: true });
     validateBackupStringField(track, 'picture', key, 16384, { nullable: true });
     validateBackupStringField(track, 'genre', key, 2000, { nullable: true });
+    validateBackupStringField(track, 'replayGainMethod', key, 40, { nullable: true });
     if (Object.prototype.hasOwnProperty.call(track, 'year') && track.year !== null) {
       if (typeof track.year === 'string') {
         if (track.year.length > 40 || track.year.includes('\0')) throw new Error(`${key}.year is invalid`);
@@ -1851,7 +1852,36 @@ function sanitizeListeningStats(value) {
   return sanitizeImportedSettings({ listeningStats: value }).listeningStats || {};
 }
 
-async function persistSettingsStorage(settings, includeListeningStats = true) {
+function mergeListeningStatsSnapshots(current, incoming) {
+  const merged = { ...(isPlainObject(current) ? current : {}) };
+  for (const [key, next] of Object.entries(incoming || {})) {
+    const previous = merged[key];
+    if (!isPlainObject(previous)) { merged[key] = next; continue; }
+    const row = { ...previous, ...next };
+    row.count = Math.max(Number(previous.count) || 0, Number(next.count) || 0);
+    row.time = Math.max(Number(previous.time) || 0, Number(next.time) || 0);
+    const previousSources = isPlainObject(previous.sources) ? previous.sources : {};
+    const nextSources = isPlainObject(next.sources) ? next.sources : {};
+    if (Object.keys(previousSources).length || Object.keys(nextSources).length) {
+      row.sources = {};
+      for (const source of ['local', 'remote']) {
+        const left = isPlainObject(previousSources[source]) ? previousSources[source] : {};
+        const right = isPlainObject(nextSources[source]) ? nextSources[source] : {};
+        const first = [left.firstPlayedAt, right.firstPlayedAt].filter(value => value && Number.isFinite(Date.parse(value))).sort((a, b) => Date.parse(a) - Date.parse(b))[0] || '';
+        const last = [left.lastPlayedAt, right.lastPlayedAt].filter(value => value && Number.isFinite(Date.parse(value))).sort((a, b) => Date.parse(b) - Date.parse(a))[0] || '';
+        row.sources[source] = { count: Math.max(Number(left.count) || 0, Number(right.count) || 0), time: Math.max(Number(left.time) || 0, Number(right.time) || 0), firstPlayedAt: first, lastPlayedAt: last };
+      }
+    }
+    if (previous.firstPlayedAt && next.firstPlayedAt) row.firstPlayedAt = Date.parse(previous.firstPlayedAt) <= Date.parse(next.firstPlayedAt) ? previous.firstPlayedAt : next.firstPlayedAt;
+    else row.firstPlayedAt = previous.firstPlayedAt || next.firstPlayedAt || '';
+    if (previous.lastPlayedAt && next.lastPlayedAt) row.lastPlayedAt = Date.parse(previous.lastPlayedAt) >= Date.parse(next.lastPlayedAt) ? previous.lastPlayedAt : next.lastPlayedAt;
+    else row.lastPlayedAt = previous.lastPlayedAt || next.lastPlayedAt || '';
+    merged[key] = row;
+  }
+  return merged;
+}
+
+async function persistSettingsStorage(settings, includeListeningStats = false) {
   const stored = splitSettingsForStorage(settings);
   const writes = [queueJsonWrite(SETTINGS_FILE, stored.settingsSnapshot)];
   if (includeListeningStats) writes.push(queueJsonWrite(LISTENING_STATS_FILE, stored.listeningStats));
@@ -3342,7 +3372,7 @@ function loadSettingsFromDisk() {
         // Move the legacy embedded payload out of settings.json as soon as it
         // is safely validated. Future playback checkpoints then avoid writing
         // a growing settings document.
-        persistSettingsStorage(appSettings).catch((error) => console.warn('Could not migrate listening stats:', error.message || error));
+        persistSettingsStorage(appSettings, true).catch((error) => console.warn('Could not migrate listening stats:', error.message || error));
       }
       seedKnownTrackIndexFromSettings().catch((error) => console.warn('Could not seed known-track index:', error.message || error));
       scheduleLastfmKnownTrackSync();
@@ -4214,8 +4244,9 @@ registerIpcHandler('save-listening-stats', async (event, listeningStats) => {
   if (backupRestoreInProgress || movedFileRelinkCommitInProgress) return false;
   try {
     const sanitized = sanitizeListeningStats(listeningStats);
-    appSettings.listeningStats = sanitized;
-    await queueJsonWrite(LISTENING_STATS_FILE, sanitized);
+    const merged = mergeListeningStatsSnapshots(appSettings.listeningStats, sanitized);
+    appSettings.listeningStats = merged;
+    await queueJsonWrite(LISTENING_STATS_FILE, merged);
     return true;
   } catch (e) {
     console.error('Failed to save listening stats:', e);
@@ -4239,12 +4270,11 @@ registerIpcHandler('save-settings', async (event, settings) => {
     sanitizeImportedSettings(sanitizeSettingsForBackup(validatedSettings));
     const stored = splitSettingsForStorage(validatedSettings);
     lastfmDebug('renderer-save-merge', { before: lastfmEncryptedFieldPresence(beforeMergeSnapshot), afterMerge: lastfmEncryptedFieldPresence(stored.settingsSnapshot), settingsPath: SETTINGS_FILE });
-    await Promise.all([
-      queueJsonWrite(SETTINGS_FILE, stored.settingsSnapshot),
-      queueJsonWrite(LISTENING_STATS_FILE, stored.listeningStats),
-    ]);
+    await queueJsonWrite(SETTINGS_FILE, stored.settingsSnapshot);
     lastfmDebug('renderer-save-completed', { disk: lastfmEncryptedFieldPresence(readAppDataFile(SETTINGS_FILE, {}, 'settings.json')), settingsPath: SETTINGS_FILE });
-    appSettings = validatedSettings;
+    // Playback can update its separate stats file while settings are being written.
+    // Keep that newer in-memory snapshot when the settings write completes.
+    appSettings = { ...validatedSettings, listeningStats: appSettings.listeningStats };
     if (validatedSettings.automaticBackupsEnabled !== wasAutomaticBackupsEnabled) {
       if (validatedSettings.automaticBackupsEnabled) scheduleAutomaticBackup();
       else cancelAutomaticBackupSchedule();
@@ -4949,56 +4979,66 @@ registerIpcHandler('lastfm-scrobble', async (event, artist, track, timestamp) =>
   } catch (e) { return false; }
 });
 
-registerIpcHandler('lastfm-get-recommendations', async () => {
+registerIpcHandler('lastfm-get-recent-artists', async () => {
   const key = String(appSettings.lastfmApiKey || '').trim();
   const username = String(appSettings.lastfmUsername || '').trim();
   if (!key || !username) return [];
+  const url = 'https://ws.audioscrobbler.com/2.0/?' + new URLSearchParams({ method: 'user.getRecentTracks', user: username, limit: '50', api_key: key, format: 'json' });
   try {
-    let recentRes = await fetch(`https://ws.audioscrobbler.com/2.0/?method=user.getRecentTracks&user=${encodeURIComponent(username)}&api_key=${key}&limit=20&format=json`);
-    let recentData = await recentRes.json();
-    let artistName = "";
-    if (recentData.recenttracks && recentData.recenttracks.track && recentData.recenttracks.track.length > 0) {
-      let randIdx = Math.floor(Math.random() * recentData.recenttracks.track.length);
-      artistName = recentData.recenttracks.track[randIdx].artist['#text'];
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    const data = await response.json();
+    const artists = (data.recenttracks && data.recenttracks.track || []).map(track => String(track.artist && (track.artist['#text'] || track.artist.name) || '').trim()).filter(Boolean);
+    if (artists.length < 5) {
+      const topUrl = 'https://ws.audioscrobbler.com/2.0/?' + new URLSearchParams({ method: 'user.getTopArtists', user: username, limit: '20', api_key: key, format: 'json' });
+      const topResponse = await fetch(topUrl);
+      if (topResponse.ok) { const topData = await topResponse.json(); (topData.topartists && topData.topartists.artist || []).forEach(artist => { if (artist.name) artists.push(artist.name); }); }
     }
+    return Array.from(new Set(artists)).slice(0, 30);
+  } catch (_) { return []; }
+});
 
-    if (!artistName) {
-      let topRes = await fetch(`https://ws.audioscrobbler.com/2.0/?method=user.getTopArtists&user=${encodeURIComponent(username)}&api_key=${key}&limit=20&format=json`);
-      let topData = await topRes.json();
-      if (topData.topartists && topData.topartists.artist && topData.topartists.artist.length > 0) {
-        let randIdx = Math.floor(Math.random() * topData.topartists.artist.length);
-        artistName = topData.topartists.artist[randIdx].name;
-      }
+registerIpcHandler('lastfm-get-recommendations', async (event, request) => {
+  const key = String(appSettings.lastfmApiKey || '').trim();
+  const username = String(appSettings.lastfmUsername || '').trim();
+  if (!key || !username) return { items: [], error: 'Connect Last.fm to load recommendations.' };
+  const mode = ['genres', 'artist'].includes(request && request.mode) ? request.mode : 'recent';
+  const fetchJson = async (params) => {
+    const url = 'https://ws.audioscrobbler.com/2.0/?' + new URLSearchParams({ ...params, api_key: key, format: 'json' });
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Last.fm request failed (' + response.status + ').');
+    const data = await response.json();
+    if (data && data.error) throw new Error(data.message || 'Last.fm request failed.');
+    return data;
+  };
+  try {
+    let artists = [];
+    if (mode === 'genres') {
+      const genres = Array.isArray(request.genres) ? request.genres.map(x => String(x || '').trim()).filter(Boolean).slice(0, 5) : [];
+      if (!genres.length) return { items: [], error: 'Select up to five genres.' };
+      const results = await Promise.all(genres.map(async genre => {
+        const data = await fetchJson({ method: 'tag.getTopAlbums', tag: genre, limit: '12' });
+        return (data.albums && data.albums.album || []).map(album => ({ name: album.name, artist: album.artist && (album.artist.name || album.artist), image: album.image && album.image.length ? album.image[album.image.length - 1]['#text'] : null }));
+      }));
+      return { items: results.flat(), error: '' };
     }
-
-    if (artistName) {
-      let simRes = await fetch(`https://ws.audioscrobbler.com/2.0/?method=artist.getSimilar&artist=${encodeURIComponent(artistName)}&api_key=${key}&limit=30&format=json`);
-      let simData = await simRes.json();
-      if (simData.similarartists && simData.similarartists.artist) {
-        let simArtists = simData.similarartists.artist.sort(() => 0.5 - Math.random()).slice(0, 13);
-        let fetchPromises = simArtists.map(async (simArtist) => {
-          try {
-            let topAlbRes = await fetch(`https://ws.audioscrobbler.com/2.0/?method=artist.getTopAlbums&artist=${encodeURIComponent(simArtist.name)}&api_key=${key}&limit=2&format=json`);
-            let topAlbData = await topAlbRes.json();
-            if (topAlbData.topalbums && topAlbData.topalbums.album && topAlbData.topalbums.album.length > 0) {
-              return topAlbData.topalbums.album.slice(0, 2).map(function(alb) {
-                return {
-                  name: alb.name,
-                  artist: simArtist.name,
-                  image: (alb.image && alb.image.length > 2) ? alb.image[2]['#text'] : null
-                };
-              });
-            }
-          } catch (err) { /* A recommendation source failing does not invalidate other artists. */ }
-          return [];
-        });
-        let recsNested = await Promise.all(fetchPromises);
-        let recs = [].concat.apply([], recsNested).filter(r => r !== null).sort(() => 0.5 - Math.random());
-        return recs;
-      }
+    let seed = String(request && request.artist || '').trim();
+    if (mode === 'artist' && !seed) return { items: [], error: 'Enter a starting artist for similar artist recommendations.' };
+    if (mode === 'recent' || !seed) {
+      const recent = await fetchJson({ method: 'user.getRecentTracks', user: username, limit: '20' });
+      const tracks = recent.recenttracks && recent.recenttracks.track || [];
+      seed = tracks.length ? (tracks[Math.floor(Math.random() * tracks.length)].artist['#text'] || '') : '';
+      if (!seed) { const top = await fetchJson({ method: 'user.getTopArtists', user: username, limit: '20' }); const rows = top.topartists && top.topartists.artist || []; seed = rows.length ? rows[Math.floor(Math.random() * rows.length)].name : ''; }
     }
-    return [];
-  } catch (e) { return []; }
+    if (!seed) return { items: [], error: '' };
+    const similar = await fetchJson({ method: 'artist.getSimilar', artist: seed, limit: '30' });
+    artists = (similar.similarartists && similar.similarartists.artist || []).slice();
+    for (let i = artists.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [artists[i], artists[j]] = [artists[j], artists[i]]; }
+    const batches = await Promise.all(artists.slice(0, 6).map(async artist => {
+      try { const data = await fetchJson({ method: 'artist.getTopAlbums', artist: artist.name, limit: '1' }); return (data.topalbums && data.topalbums.album || []).map(album => ({ name: album.name, artist: artist.name, image: album.image && album.image.length ? album.image[album.image.length - 1]['#text'] : null })); } catch (_) { return []; }
+    }));
+    return { items: batches.flat(), seed, error: '' };
+  } catch (error) { return { items: [], error: error && error.message || 'Last.fm recommendations could not be loaded.' }; }
 });
 
 // Phase 4A discovery IPC is intentionally narrow: the renderer receives only

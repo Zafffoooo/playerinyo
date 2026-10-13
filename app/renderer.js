@@ -193,10 +193,14 @@ function showToast(message, options) {
   if (!options.persistent) {
     var duration = options.duration || (options.actionLabel ? 8000 : 3600);
     toastHideTimer = setTimeout(dismiss, duration);
-    toast.onmouseenter = function () { clearTimeout(toastHideTimer); };
-    toast.onmouseleave = function () { toastHideTimer = setTimeout(dismiss, 1200); };
-    toast.onfocusin = function () { clearTimeout(toastHideTimer); };
-    toast.onfocusout = function () { toastHideTimer = setTimeout(dismiss, 1200); };
+    if (options.pauseOnHover === false) {
+      toast.onmouseenter = toast.onmouseleave = toast.onfocusin = toast.onfocusout = null;
+    } else {
+      toast.onmouseenter = function () { clearTimeout(toastHideTimer); };
+      toast.onmouseleave = function () { toastHideTimer = setTimeout(dismiss, 1200); };
+      toast.onfocusin = function () { clearTimeout(toastHideTimer); };
+      toast.onfocusout = function () { toastHideTimer = setTimeout(dismiss, 1200); };
+    }
   } else {
     toast.onmouseenter = toast.onmouseleave = toast.onfocusin = toast.onfocusout = null;
   }
@@ -909,7 +913,7 @@ async function undoLastAction(expectedSnapshotId) {
 }
 function showUndoToast(message, snapshot) {
   if (!snapshot) { showToast(message); return; }
-  showToast(message, { actionLabel: 'Undo', persistent: true, onAction: function () { return undoLastAction(snapshot.id); } });
+  showToast(message, { actionLabel: 'Undo', duration: 5000, pauseOnHover: false, onAction: function () { return undoLastAction(snapshot.id); } });
 }
 function getContextMenuItems(menu) {
   if (!menu) return [];
@@ -1187,6 +1191,47 @@ function getAlbumAddedAt(album) {
   return m;
 }
 function getPlaylistTrackFilePath(record) { return record ? (record.FilePath || record.filePath || record.Path || record.path || '') : ''; }
+function syncPlaylistTrackDetailsFromLibrary(files) {
+  var filesByPath = new Map();
+  (files || []).forEach(function (file) {
+    var filePath = stripFileUrl(file && file.filePath);
+    if (filePath) filesByPath.set(filePath, file);
+  });
+  if (!filesByPath.size) return { updated: 0, playlistIds: [], changes: [] };
+
+  var updated = 0;
+  var playlistIds = new Set();
+  var changes = [];
+  state.playlists.forEach(function (playlist) {
+    if (!playlist || playlist.isSpecial || !Array.isArray(playlist.tracks)) return;
+    playlist.tracks.forEach(function (record) {
+      var file = filesByPath.get(stripFileUrl(getPlaylistTrackFilePath(record)));
+      if (!file) return;
+      var changed = false;
+      [['Song', file.title], ['Artist', file.artist], ['Album', file.album]].forEach(function (entry) {
+        var value = String(entry[1] || '');
+        if (String(record[entry[0]] || '') !== value) {
+          changes.push({ record: record, key: entry[0], hadKey: Object.prototype.hasOwnProperty.call(record, entry[0]), value: record[entry[0]] });
+          record[entry[0]] = value;
+          changed = true;
+        }
+      });
+      if (changed) {
+        updated++;
+        playlistIds.add(playlist.id);
+      }
+    });
+  });
+  return { updated: updated, playlistIds: Array.from(playlistIds), changes: changes };
+}
+function revertPlaylistTrackDetailsSync(sync) {
+  if (!sync || !Array.isArray(sync.changes)) return;
+  for (var i = sync.changes.length - 1; i >= 0; i--) {
+    var change = sync.changes[i];
+    if (change.hadKey) change.record[change.key] = change.value;
+    else delete change.record[change.key];
+  }
+}
 function getPlaylistTrackAddedAtMs(record) {
   if (!record) return 0;
   var value = Number(record.AddedAtMs !== undefined ? record.AddedAtMs : record.addedAtMs);

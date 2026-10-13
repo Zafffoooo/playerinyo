@@ -12,6 +12,8 @@
       if (!row || typeof row !== 'object') return;
       result[source].count = Math.max(0, Number(row.count) || 0);
       result[source].time = Math.max(0, Number(row.time) || 0);
+      result[source].firstPlayedAt = typeof row.firstPlayedAt === 'string' ? row.firstPlayedAt : '';
+      result[source].lastPlayedAt = typeof row.lastPlayedAt === 'string' ? row.lastPlayedAt : '';
     });
     return result;
   }
@@ -29,13 +31,19 @@
     var sources = normalize(source && source.sources);
     add(target, 'local', sources.local.count, sources.local.time);
     add(target, 'remote', sources.remote.count, sources.remote.time);
+    ['local', 'remote'].forEach(function (name) {
+      var dest = target.sources[name], input = sources[name];
+      if (input.firstPlayedAt && (!dest.firstPlayedAt || Date.parse(input.firstPlayedAt) < Date.parse(dest.firstPlayedAt))) dest.firstPlayedAt = input.firstPlayedAt;
+      if (input.lastPlayedAt && (!dest.lastPlayedAt || Date.parse(input.lastPlayedAt) > Date.parse(dest.lastPlayedAt))) dest.lastPlayedAt = input.lastPlayedAt;
+    });
     return target;
   }
 
   function values(entry, source) {
     if (source === 'all') return { count: Math.max(0, Number(entry && entry.count) || 0), time: Math.max(0, Number(entry && entry.time) || 0) };
     var normalized = normalize(entry && entry.sources);
-    return source === 'remote' ? normalized.remote : normalized.local;
+    var row = source === 'remote' ? normalized.remote : normalized.local;
+    return { count: row.count, time: row.time };
   }
 
   return { normalize: normalize, add: add, merge: merge, values: values };
