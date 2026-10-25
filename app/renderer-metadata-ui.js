@@ -379,7 +379,7 @@ function unloadAudioForMetadataSave(filePaths) {
     if (wasPlaying && activeAffected && activeSnapshot) {
       var generation = ++playbackGeneration;
       playbackTransitionPending = true;
-      activeSnapshot.audioEl.play().then(function () {
+      ensureAudioOutputReady().then(function () { return activeSnapshot.audioEl.play(); }).then(function () {
         if (generation !== playbackGeneration) return;
         playbackTransitionPending = false;
         state.isPlaying = true;

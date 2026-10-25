@@ -11,6 +11,7 @@ test('imported settings retain only validated allowlisted values', () => {
   const sanitized = sanitizeImportedSettings({
     minimizeToTray: true,
     audioMode: 'mono',
+    audioOutputDeviceId: 'speaker-123',
     volume: 0.75,
     libraryRoots: ['/music', '/music'],
     accentColor: '#A1B2C3',
@@ -21,6 +22,7 @@ test('imported settings retain only validated allowlisted values', () => {
   assert.deepEqual(sanitized, {
     minimizeToTray: true,
     audioMode: 'mono',
+    audioOutputDeviceId: 'speaker-123',
     volume: 0.75,
     libraryRoots: ['/music'],
     accentColor: '#A1B2C3',
@@ -33,6 +35,7 @@ test('imported settings reject invalid types and bounded values', () => {
   assert.throws(() => sanitizeImportedSettings({ volume: 2 }), /invalid number/);
   assert.throws(() => sanitizeImportedSettings({ accentColor: 'red' }), /six-digit hex color/);
   assert.throws(() => sanitizeImportedSettings({ libraryRoots: ['bad\0path'] }), /invalid string value/);
+  assert.throws(() => sanitizeImportedSettings({ audioOutputDeviceId: 'x'.repeat(513) }), /invalid string value/);
 });
 
 test('liked songs preserve safe local and remote identities only', () => {

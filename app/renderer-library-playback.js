@@ -1096,6 +1096,8 @@ function getTrackFromTableRow(row) {
 function openTrackContextMenu(track, x, y, opener) {
   if (!track) return;
   currentContextMenuTrack = track;
+  var versionAction = $('ctx-select-version');
+  if (versionAction) versionAction.hidden = !(isRemotePlaybackTrack(track) || (track.csvRecord && !track.matchedFile));
   updateTrackContextDownloadState(track);
   positionContextMenu($('track-context-menu'), x, y, opener);
 }
@@ -1741,8 +1743,28 @@ function updatePlaybackMarkers() {
   syncDockPlaylistStates();
 }
 
+var lastDiscordActivityKey = '';
+function syncDiscordPlaybackActivity(force) {
+  if (!window.api || !window.api.discordUpdate || !window.api.discordClear || !appSettings.discordRpc) { lastDiscordActivityKey = ''; return; }
+  var track = state.currentPlayingTrack;
+  var playing = !!(track && state.isPlaying);
+  var paused = !!(track && !playing && appSettings.discordShowPaused);
+  var artworkUrl = playing || paused ? (track.matchedFile && track.artwork || getTrackArtworkUrl(track)) : '';
+  var key = playing || paused ? [track.matchedFile && track.matchedFile.filePath || track.playback && track.playback.videoId || '', track.title || '', track.artist || '', artworkUrl, playing ? 'playing' : 'paused', appSettings.discordArtworkSource || 'lookup', appSettings.discordTextFormat || 'title-artist', appSettings.discordShowProgress !== false].join('|') : 'idle';
+  if (!force && key === lastDiscordActivityKey) return;
+  lastDiscordActivityKey = key;
+  if (playing || paused) {
+    var audio = getActiveAudioEl();
+    var position = Number(audio && audio.currentTime) || 0;
+    var duration = Number(audio && audio.duration);
+    if (!Number.isFinite(duration) || duration <= 0) duration = Number(track.duration) || 0;
+    window.api.discordUpdate(track.title, track.artist, track.album, Date.now() - Math.round(position * 1000), artworkUrl, Math.round(duration * 1000), track.trackMbid || track.matchedFile && track.matchedFile.trackMbid || '', playing ? 'playing' : 'paused').catch(function (e) { console.error('Discord activity update failed:', e); });
+  } else window.api.discordClear().catch(function (e) { console.error('Discord activity clear failed:', e); });
+}
 function syncPlaybackStateUi() {
   updatePlayerUI();
+  if (typeof syncYouTubeMusicResultsPlaybackState === 'function') syncYouTubeMusicResultsPlaybackState();
+  syncDiscordPlaybackActivity();
   if (window.api.updateThumbar) window.api.updateThumbar(state.isPlaying);
   if (state.isPlaying && analyserNode && !visualizerFrame) drawVisualizer();
   updatePlaybackMarkers();

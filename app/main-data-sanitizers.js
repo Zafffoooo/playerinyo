@@ -279,7 +279,7 @@ function sanitizeImportedSettings(settings) {
   if (!isPlainObject(settings)) throw new Error('Backup settings must be an object');
   const next = {};
   const booleanKeys = [
-    'minimizeToTray', 'useNativeTitleBar', 'discordRpc', 'normalization', 'notifications',
+    'minimizeToTray', 'useNativeTitleBar', 'discordRpc', 'discordShowProgress', 'discordShowPaused', 'normalization', 'notifications',
     'virtualScrolling', 'lazyLoading', 'glassEffects', 'npLyricsVisible', 'sortAscending',
     'likedSongsSortAscending', 'isPlaylistGridView', 'automaticBackupsEnabled',
   ];
@@ -295,7 +295,12 @@ function sanitizeImportedSettings(settings) {
     ytdlCookiesBrowser: new Set(['firefox', 'chrome', 'chromium', 'brave', 'edge', 'vivaldi', 'opera']),
     likedSongsSortBy: new Set(['Custom Order', 'Title', 'Artist', 'Album', 'Recently Added']),
     dockMode: new Set(['collapsed', 'expanded']),
+    discordArtworkSource: new Set(['lookup', 'online', 'logo']),
+    discordTextFormat: new Set(['title-artist', 'artist-title']),
   };
+  if (Object.prototype.hasOwnProperty.call(settings, 'audioOutputDeviceId')) {
+    next.audioOutputDeviceId = boundedBackupString(settings.audioOutputDeviceId, 'audioOutputDeviceId', 512);
+  }
   for (const [key, allowed] of Object.entries(enumSettings)) {
     if (!Object.prototype.hasOwnProperty.call(settings, key)) continue;
     const value = boundedBackupString(settings[key], key, 40, false);
@@ -306,12 +311,13 @@ function sanitizeImportedSettings(settings) {
   // Cookie-file locations are intentionally device-local. Older exports may
   // still contain one, but restoring it on another machine is neither useful
   // nor privacy-preserving.
-  const stringSettings = { ytdlDownloadFolder: 4096, lastfmUsername: 500 };
+  const stringSettings = { ytdlDownloadFolder: 4096, lastfmUsername: 500, discordApplicationId: 20 };
   for (const [key, maxLength] of Object.entries(stringSettings)) {
     if (!Object.prototype.hasOwnProperty.call(settings, key)) continue;
     if (key === 'lastfmUsername' && settings[key] === null) next[key] = null;
     else next[key] = boundedBackupString(settings[key], key, maxLength);
   }
+  if (next.discordApplicationId && !/^[0-9]{17,20}$/.test(next.discordApplicationId)) backupSettingError('discordApplicationId', 'must be a 17–20 digit application ID');
 
   const numberSettings = {
     sidebarWidth: [120, 2000, true],

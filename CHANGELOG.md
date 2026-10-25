@@ -2,6 +2,26 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.6 — 2026-10-25
+
+### Added
+
+- Import playlists from Spotify account-data ZIP and JSON files, review local matches, and reimport while retaining existing selections.
+- Choose another YouTube Music version for a playlist track and save that choice.
+- Look up matching online artwork for Discord Rich Presence, with playback progress and clearer connection status.
+- Added audio output selection, personal lyrics editing, and an option to retry failed download matches.
+
+### Changed
+
+- Improved YouTube Music search and playback preparation, with clearer loading and error states.
+- Refined Now Playing controls, artwork loading, lyrics layout, and the search source menu.
+- Improved local track transitions and download recovery after interruption.
+
+### Fixed
+
+- Prevented stale artwork and lyrics from appearing after rapid track changes.
+- Fixed Discord Rich Presence reconnecting when Discord starts after playback.
+
 ## 0.1.5 — 2026-10-13
 
 ### Added

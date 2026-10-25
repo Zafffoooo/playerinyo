@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { parse } = require('csv-parse');
 const NodeID3 = require('node-id3');
+const { parseSpotifyAccountFile } = require('./spotify-account-playlists');
 const { parseM3u, setLocalRecordExistence, normalizeExportTrack, buildM3u } = require('./playlist-format');
 const { applyPathRemap, buildRelinkProposals, canonicalPath, inferRootReplacements } = require('./moved-file-relink');
 const { createLastfmApiClient, restoreCacheEntries } = require('./lastfm-client');
@@ -72,43 +73,179 @@ function handleFatalProcessError(kind, error) {
 process.on('uncaughtException', (err) => handleFatalProcessError('Uncaught exception', err));
 process.on('unhandledRejection', (reason) => handleFatalProcessError('Unhandled rejection', reason));
 
+const { lookupDiscordCover, configureDiscordCoverCache } = require('./discord-cover-lookup');
+
 // Discord RPC
+const DEFAULT_DISCORD_APPLICATION_ID = '1563774809563988080';
+const DISCORD_DEFAULT_ARTWORK_URL = 'https://raw.githubusercontent.com/Zafffoooo/playerinyo/main/assets/icon.png';
+const DISCORD_ARTWORK_HOSTS = new Set(['lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'i.ytimg.com', 'i.scdn.co', 'mosaic.scdn.co', 'lastfm.freetls.fastly.net', 'coverartarchive.org', 'archive.org', 'i.discogs.com']);
 let DiscordRPC = null;
 let discordClient = null;
 let discordEnabled = false;
+let discordConnecting = null;
+let discordRetryTimer = null;
+let discordDesiredActivity = null;
+let discordConnectionGeneration = 0;
+let discordCoverKey = '';
+let discordCoverUrl = '';
+let discordCoverController = null;
+let discordCoverTimer = null;
+let discordCoverState = { status: 'idle', source: '', error: '' };
+let discordPlaybackState = 'idle';
+let discordCoverRefreshOnce = false;
 try {
   DiscordRPC = require('discord-rpc');
 } catch (e) { console.log('discord-rpc not available:', e.message); }
 
 let discordLastError = null;
+function closeFailedDiscordClient(client) {
+  const socket = client && client.transport && client.transport.socket;
+  if (socket && !socket.destroyed) socket.destroy();
+}
+function discordApplicationId() {
+  const id = String((appSettings && appSettings.discordApplicationId) || DEFAULT_DISCORD_APPLICATION_ID).trim();
+  return /^[0-9]{17,20}$/.test(id) ? id : '';
+}
+function resetDiscordConnection() {
+  discordConnectionGeneration++;
+  const client = discordClient;
+  discordClient = null;
+  discordEnabled = false;
+  discordConnecting = null;
+  closeFailedDiscordClient(client);
+}
+function cancelDiscordCoverLookup() {
+  if (discordCoverController) discordCoverController.abort();
+  discordCoverController = null;
+  if (discordCoverTimer) clearTimeout(discordCoverTimer);
+  discordCoverTimer = null;
+}
 async function discordConnect() {
   if (!DiscordRPC) { discordLastError = "discord-rpc module missing (run npm install)"; return; }
-  if (discordClient) return;
+  if (!appSettings || !appSettings.discordRpc || discordEnabled) return;
+  const clientId = discordApplicationId();
+  if (!clientId) { discordLastError = 'Add a valid Discord Application ID in Settings'; return; }
+  if (discordConnecting) return discordConnecting;
   discordLastError = null;
-  try {
-    discordClient = new DiscordRPC.Client({ transport: 'ipc' });
-    discordClient.on('ready', () => { discordEnabled = true; discordLastError = null; console.log('Discord RPC connected'); });
-    discordClient.on('disconnected', () => { discordEnabled = false; discordClient = null; discordLastError = "Disconnected from Discord"; });
-    discordClient.on('error', (err) => { discordEnabled = false; discordLastError = err && err.message ? err.message : String(err); console.log('Discord RPC error:', discordLastError); });
-    await discordClient.login({ clientId: '497005876856053760' });
-  } catch (e) { console.log('Discord RPC connect failed:', e.message); discordLastError = e.message; discordClient = null; }
+  const generation = discordConnectionGeneration;
+  discordConnecting = (async () => {
+    const client = new DiscordRPC.Client({ transport: 'ipc' });
+    discordClient = client;
+    client.on('ready', () => {
+      if (!appSettings.discordRpc || discordClient !== client || generation !== discordConnectionGeneration) return;
+      discordEnabled = true; discordLastError = null;
+      if (discordDesiredActivity) discordSetActivity(...discordDesiredActivity);
+    });
+    client.on('disconnected', () => {
+      if (discordClient !== client) return;
+      discordEnabled = false; discordClient = null; discordLastError = 'Disconnected from Discord';
+      closeFailedDiscordClient(client);
+    });
+    client.on('error', (err) => {
+      if (discordClient !== client) return;
+      discordEnabled = false; discordClient = null;
+      discordLastError = err && err.message ? err.message : String(err);
+      // destroy() tries to send an IPC frame even when login never got a socket.
+      closeFailedDiscordClient(client);
+    });
+    try { await client.login({ clientId }); }
+    catch (e) {
+      if (discordClient === client && generation === discordConnectionGeneration) {
+        discordLastError = e && e.message === 'RPC_CONNECTION_TIMEOUT'
+          ? 'Discord did not respond; check the Application ID and Discord connection'
+          : (e && e.message ? e.message : String(e));
+        discordClient = null;
+        discordEnabled = false;
+      }
+      closeFailedDiscordClient(client);
+    }
+  })();
+  try { await discordConnecting; }
+  catch (error) {
+    if (generation === discordConnectionGeneration) {
+      discordLastError = error && error.message ? error.message : String(error);
+      discordClient = null;
+      discordEnabled = false;
+    }
+  }
+  finally { if (generation === discordConnectionGeneration) discordConnecting = null; }
 }
 
-async function discordSetActivity(title, artist, album, startTime) {
-  if (!discordClient || !discordEnabled) return;
+function discordArtworkUrl(candidate) {
+  if (typeof candidate !== 'string' || candidate.length > 2048) return DISCORD_DEFAULT_ARTWORK_URL;
   try {
-    await discordClient.setActivity({
-      details: title || 'Unknown Track',
-      state: artist ? 'by ' + artist : 'Unknown Artist',
-      largeImageKey: 'music',
-      largeImageText: album || '',
-      startTimestamp: startTime ? new Date(startTime) : undefined,
-      instance: false,
+    const url = new URL(candidate);
+    if (url.protocol === 'https:' && !url.username && !url.password && DISCORD_ARTWORK_HOSTS.has(url.hostname)) return url.href;
+  } catch (_) { /* Local file URLs cannot be fetched by Discord. */ }
+  return DISCORD_DEFAULT_ARTWORK_URL;
+}
+async function discordSetActivity(title, artist, album, startTime, artworkUrl, durationMs, trackMbid, playbackState) {
+  if (!appSettings || !appSettings.discordRpc) return;
+  discordDesiredActivity = [title, artist, album, startTime, artworkUrl, durationMs, trackMbid, playbackState];
+  discordPlaybackState = playbackState === 'paused' ? 'paused' : 'playing';
+  const coverSource = appSettings.discordArtworkSource || 'lookup';
+  const nextCoverKey = [title, artist, album, trackMbid].join('|');
+  if (nextCoverKey !== discordCoverKey || coverSource !== 'lookup') {
+    cancelDiscordCoverLookup();
+    discordCoverKey = nextCoverKey;
+    discordCoverUrl = '';
+    discordCoverState = { status: 'idle', source: '', error: '' };
+  }
+  if (coverSource === 'lookup' && discordPlaybackState === 'playing' && !discordCoverController && discordCoverState.status === 'idle') {
+    discordCoverState = { status: 'searching', source: '', error: '' };
+    const controller = new AbortController();
+    discordCoverController = controller;
+    const refresh = discordCoverRefreshOnce;
+    discordCoverRefreshOnce = false;
+    lookupDiscordCover({ title, artist, album, trackMbid }, controller.signal, refresh).then((result) => {
+      if (discordCoverController !== controller || discordCoverKey !== nextCoverKey) return;
+      discordCoverController = null;
+      discordCoverUrl = result.url || '';
+      discordCoverState = { status: result.status, source: result.source || '', release: result.release || '', url: result.url || '', error: result.error || '' };
+      if (discordCoverTimer) clearTimeout(discordCoverTimer);
+      discordCoverTimer = setTimeout(() => {
+        discordCoverTimer = null;
+        if (discordDesiredActivity && discordCoverKey === nextCoverKey) discordSetActivity(...discordDesiredActivity);
+      }, 1000);
+    }).catch((error) => {
+      if (discordCoverController !== controller) return;
+      discordCoverController = null;
+      discordCoverState = { status: 'error', source: '', error: String(error && error.message || error) };
     });
-  } catch (e) { console.log('Discord setActivity error:', e); }
+  }
+  if (!discordClient || !discordEnabled) { discordConnect(); return; }
+  const client = discordClient;
+  const format = appSettings.discordTextFormat === 'artist-title' ? 'artist-title' : 'title-artist';
+  const activity = {
+    type: 2,
+    details: format === 'artist-title' ? (artist || 'Unknown Artist') : (title || 'Unknown Track'),
+    state: format === 'artist-title' ? (title || 'Unknown Track') : (artist ? 'by ' + artist : 'Unknown Artist'),
+    instance: false,
+  };
+  if (playbackState === 'paused') activity.state = 'Paused · ' + activity.state;
+  if (appSettings.discordShowProgress !== false && playbackState !== 'paused' && Number.isFinite(startTime) && Number.isFinite(durationMs) && durationMs > 0 && durationMs < 24 * 60 * 60 * 1000) {
+    activity.timestamps = { start: Math.round(startTime), end: Math.round(startTime + durationMs) };
+  }
+  const selectedArt = coverSource === 'lookup' ? (discordCoverUrl || artworkUrl) : coverSource === 'logo' ? '' : artworkUrl;
+  activity.assets = { large_image: discordArtworkUrl(selectedArt), large_text: album || title || 'Playerinyo' };
+  try {
+    await client.request('SET_ACTIVITY', { pid: process.pid, activity });
+    if (discordClient === client) discordLastError = null;
+  } catch (e) {
+    discordCoverState = { status: 'error', source: '', error: 'Discord rejected the artwork' };
+    delete activity.assets;
+    try { await client.request('SET_ACTIVITY', { pid: process.pid, activity }); discordLastError = null; }
+    catch (fallbackError) { discordLastError = fallbackError.message || String(fallbackError); }
+  }
 }
 
 async function discordClear() {
+  discordDesiredActivity = null;
+  discordPlaybackState = 'idle';
+  cancelDiscordCoverLookup();
+  discordCoverKey = '';
+  discordCoverUrl = '';
+  discordCoverState = { status: 'idle', source: '', error: '' };
   if (!discordClient) return true;
   try { await discordClient.clearActivity(); return true; }
   catch (e) {
@@ -558,6 +695,8 @@ async function recoverInterruptedDataTransaction() {
 
 function sanitizeSettingsForBackup(settings) {
   const next = { ...(settings || {}) };
+  // A fresh profile may not have created the separate statistics sidecar yet.
+  if (next.listeningStats === undefined) delete next.listeningStats;
   for (const key of SENSITIVE_SETTING_KEYS) delete next[key];
   // The cookie contents never enter app state, but a cookies.txt location can
   // disclose a user name or local directory structure when a backup is shared.
@@ -896,10 +1035,10 @@ function createWindow() {
     mainWindow.webContents.toggleDevTools();
   });
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(webContents === mainWindow.webContents && permission === 'notifications');
+    callback(webContents === mainWindow.webContents && (permission === 'notifications' || permission === 'speaker-selection'));
   });
   mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission) => {
-    return webContents === mainWindow.webContents && permission === 'notifications';
+    return webContents === mainWindow.webContents && (permission === 'notifications' || permission === 'speaker-selection');
   });
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
@@ -1090,19 +1229,16 @@ function updateMprisInner(payload) {
 async function reconcileDiscordRuntime(enabled) {
   const warnings = [];
   if (enabled) {
+    if (!discordRetryTimer) discordRetryTimer = setInterval(() => { if (appSettings.discordRpc && !discordEnabled) discordConnect(); }, 5000);
     await discordConnect();
     if (discordLastError) warnings.push(`Discord RPC could not be enabled: ${discordLastError}`);
     return warnings;
   }
+  if (discordRetryTimer) { clearInterval(discordRetryTimer); discordRetryTimer = null; }
+  resetDiscordConnection();
   try {
     if (!(await discordClear())) warnings.push(`Discord RPC activity could not be cleared: ${discordLastError || 'unknown error'}`);
   } catch (e) { warnings.push(`Discord RPC activity could not be cleared: ${e.message || e}`); }
-  if (discordClient) {
-    try { await Promise.resolve(discordClient.destroy()); }
-    catch (e) { warnings.push(`Discord RPC could not be disconnected: ${e.message || e}`); }
-  }
-  discordClient = null;
-  discordEnabled = false;
   return warnings;
 }
 
@@ -1638,13 +1774,169 @@ registerIpcHandler('import-playlist', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: [
-      { name: 'Playlist Files', extensions: ['csv', 'm3u', 'm3u8'] },
+      { name: 'Playlist Files', extensions: ['csv', 'm3u', 'm3u8', 'json', 'zip'] },
+      { name: 'Spotify Account Export', extensions: ['json', 'zip'] },
       { name: 'CSV', extensions: ['csv'] },
       { name: 'M3U Playlists', extensions: ['m3u', 'm3u8'] },
     ]
   });
   if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
-  return parsePlaylistImportFile(filePaths[0]);
+  return ['.json', '.zip'].includes(path.extname(filePaths[0]).toLowerCase()) ? parseSpotifyAccountFile(filePaths[0]) : parsePlaylistImportFile(filePaths[0]);
+});
+
+const playlistUrlImportRequests = new Set();
+registerIpcHandler('cancel-playlist-url-import', (event, rawId) => {
+  const id = String(rawId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+  if (!playlistUrlImportRequests.has(id)) return false;
+  cancelledYtdlpDownloads.add(id);
+  const child = activeYtdlpDownloads.get(id);
+  if (child) { try { child.kill('SIGTERM'); } catch (_) { /* Already finished. */ } }
+  return true;
+});
+registerIpcHandler('import-playlist-url', async (event, rawUrl, rawId) => {
+  const id = String(rawId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+  if (!id || playlistUrlImportRequests.has(id)) return { ok: false, error: 'Invalid import request.' };
+  let url;
+  try { url = new URL(String(rawUrl || '').trim()); } catch (_) { return { ok: false, error: 'Enter a valid playlist URL.' }; }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || String(rawUrl).length > 2048) return { ok: false, error: 'Only HTTPS playlist links are supported.' };
+  const spotifyMatch = url.hostname === 'open.spotify.com' && /^\/(?:embed\/)?playlist\/([A-Za-z0-9]{22})\/?$/.exec(url.pathname);
+  const youtube = url.hostname === 'music.youtube.com' && url.pathname === '/playlist' && /^[A-Za-z0-9_-]{10,80}$/.test(url.searchParams.get('list') || '');
+  if (!spotifyMatch && !youtube) return { ok: false, error: 'Use a public Spotify or YouTube Music playlist link.' };
+  playlistUrlImportRequests.add(id);
+  const progress = (message, done, total) => { try { event.sender.send('playlist-url-import-progress', { requestId: id, message, done, total }); } catch (_) { /* The window may have closed. */ } };
+  try {
+    progress('Reading playlist…', 0, 0);
+    if (spotifyMatch) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
+      try {
+        const embedUrl = `https://open.spotify.com/embed/playlist/${spotifyMatch[1]}`;
+        const response = await fetch(embedUrl, { signal: controller.signal, redirect: 'manual', headers: { 'User-Agent': APP_USER_AGENT } });
+        if (response.status >= 300 && response.status < 400) return { ok: false, error: 'Spotify redirected this playlist. Use its direct public playlist link.' };
+        if (!response.ok) return { ok: false, error: response.status === 404 ? 'This Spotify playlist is private or unavailable.' : `Spotify returned ${response.status}. Try again later.` };
+        if (Number(response.headers.get('content-length')) > 2 * 1024 * 1024) return { ok: false, error: 'Spotify response is too large.' };
+        const reader = response.body.getReader();
+        let html = '';
+        const decoder = new TextDecoder();
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          html += decoder.decode(chunk.value, { stream: true });
+          if (html.length > 2 * 1024 * 1024) return { ok: false, error: 'Spotify response is too large.' };
+          if (cancelledYtdlpDownloads.has(id)) return { ok: false, cancelled: true };
+        }
+        html += decoder.decode();
+        const match = /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/.exec(html);
+        if (!match) return { ok: false, error: 'Spotify playlist data is unavailable.' };
+        const entity = JSON.parse(match[1]).props?.pageProps?.state?.data?.entity;
+        if (!entity || entity.type !== 'playlist' || !Array.isArray(entity.trackList)) return { ok: false, error: 'Spotify playlist is private or unavailable.' };
+        if (entity.trackList.length >= 100) return { ok: false, error: 'Spotify exposes only the first 100 tracks of this playlist. Import was stopped to avoid a partial playlist.' };
+        if (!entity.trackList.length) return { ok: false, error: 'This Spotify playlist is empty or unavailable.' };
+        const records = entity.trackList.map(item => ({ Song: String(item.title || '').slice(0, 300), Artist: String(item.subtitle || '').slice(0, 200), Album: '', Duration: Math.round((Number(item.duration) || 0) / 1000), SourceUrl: item.uri || '', SourceFormat: 'url' }));
+        if (records.some(item => !item.Song)) return { ok: false, error: 'Some Spotify tracks are unavailable. Import was stopped.' };
+        progress('Ready for review', records.length, records.length);
+        return { ok: true, format: 'url', sourcePath: embedUrl, name: String(entity.name || 'Spotify Playlist').slice(0, 200), coverUrl: entity.coverArt?.sources?.[0]?.url || '', records };
+      } finally { clearTimeout(timer); }
+    }
+    const playlistUrl = `https://music.youtube.com/playlist?list=${encodeURIComponent(url.searchParams.get('list'))}`;
+    let progressText = '';
+    const result = await runProcess('yt-dlp', ['--ignore-config', '--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-end', '2001', playlistUrl], {
+      timeoutMs: 120000, processKey: id, maxOutputChars: 8 * 1024 * 1024,
+      onStderr(chunk) {
+        progressText = (progressText + chunk).slice(-512);
+        const matches = [...progressText.matchAll(/Downloading item (\d+) of (\d+)/g)];
+        const match = matches[matches.length - 1];
+        if (match) progress('Reading tracks…', Number(match[1]), Number(match[2]));
+      }
+    });
+    if (result.cancelled || cancelledYtdlpDownloads.has(id)) return { ok: false, cancelled: true };
+    if (!result.ok) return { ok: false, error: formatYtdlpError(result.stderr || result.stdout, result.timedOut ? 'Playlist import timed out.' : 'Could not read this playlist.') };
+    let data;
+    try { data = JSON.parse(result.stdout); } catch (_) { return { ok: false, error: 'Playlist response was incomplete.' }; }
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (!entries.length) return { ok: false, error: 'This playlist is empty, private, or unavailable.' };
+    if (entries.length > 2000 || (Number(data.playlist_count) > entries.length) || entries.some(item => !item || !item.title)) return { ok: false, error: 'The complete playlist could not be read. Nothing was imported.' };
+    const records = entries.map(item => ({ Song: String(item.title).slice(0, 300), Artist: String(item.artist || item.uploader || '').slice(0, 200), Album: '', VideoId: /^[A-Za-z0-9_-]{11}$/.test(item.id || '') ? item.id : '', SourceUrl: item.url || '', SourceFormat: 'url' }));
+    progress('Ready for review', records.length, records.length);
+    const coverUrl = Array.isArray(data.thumbnails) ? String(data.thumbnails[data.thumbnails.length - 1]?.url || '') : '';
+    return { ok: true, format: 'url', sourcePath: playlistUrl, name: String(data.title || 'YouTube Music Playlist').slice(0, 200), coverUrl: /^https:\/\//.test(coverUrl) ? coverUrl.slice(0, 4096) : '', records };
+  } catch (error) { return { ok: false, error: error.name === 'AbortError' ? 'Playlist request timed out.' : (error.message || 'Playlist import failed.') }; }
+  finally { playlistUrlImportRequests.delete(id); cancelledYtdlpDownloads.delete(id); }
+});
+
+const youtubeMusicSearchCache = new Map();
+const youtubeMusicSearchInFlight = new Map();
+registerIpcHandler('search-youtube-music', async (event, rawQuery) => {
+  const query = String(rawQuery || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (query.length < 2) return { ok: false, error: 'Enter at least two characters.' };
+  const key = query.toLocaleLowerCase();
+  const cached = youtubeMusicSearchCache.get(key);
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return { ...cached.result, cached: true };
+  if (youtubeMusicSearchInFlight.has(key)) return youtubeMusicSearchInFlight.get(key);
+  const task = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    let payload;
+    try {
+      const response = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
+        method: 'POST', signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Origin: 'https://music.youtube.com', 'X-YouTube-Client-Name': '67', 'X-YouTube-Client-Version': '1.20260707.12.00', 'User-Agent': APP_USER_AGENT },
+        body: JSON.stringify({ context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20260707.12.00', hl: 'en', gl: 'US' } }, query, params: 'EgWKAQIIAWoKEAoQAxAEEAkQBQ==' }),
+      });
+      if (response.status === 429) return { ok: false, error: 'YouTube Music is rate limiting searches. Wait a minute before retrying.' };
+      if (!response.ok) return { ok: false, error: `YouTube Music returned ${response.status}. Try again shortly.` };
+      if (Number(response.headers.get('content-length')) > 1024 * 1024) return { ok: false, error: 'YouTube Music returned an oversized response.' };
+      const reader = response.body.getReader();
+      const chunks = []; let bytes = 0;
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.length;
+        if (bytes > 1024 * 1024) return { ok: false, error: 'YouTube Music returned an oversized response.' };
+        chunks.push(part.value);
+      }
+      const raw = new Uint8Array(bytes); let offset = 0;
+      chunks.forEach(chunk => { raw.set(chunk, offset); offset += chunk.length; });
+      payload = JSON.parse(new TextDecoder().decode(raw));
+    } finally { clearTimeout(timer); }
+    const shelves = payload?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+    const entries = shelves.flatMap(section => section.musicShelfRenderer?.contents || []).map(item => item.musicResponsiveListItemRenderer).filter(Boolean);
+    const terms = key.split(/\s+/).filter(Boolean);
+    const seen = new Set();
+    const songs = entries.map((item, index) => {
+      const id = String(item.playlistItemData?.videoId || '');
+      const columns = (item.flexColumns || []).map(column => column.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []);
+      const title = String(columns[0]?.map(run => run.text || '').join('') || '').slice(0, 300);
+      const secondary = columns[1] || [];
+      const segments = secondary.map(run => run.text || '').join('').split(/\s*•\s*/);
+      const artist = String(segments[0] || '').slice(0, 200);
+      const durationLabel = segments.find(segment => /^\d+:\d\d(?::\d\d)?$/.test(segment.trim()));
+      const duration = durationLabel ? durationLabel.trim().split(':').reduce((value, part) => value * 60 + Number(part), 0) : 0;
+      const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+      const rawArtwork = String(thumbnails[thumbnails.length - 1]?.url || '');
+      let artwork = '';
+      try {
+        const imageUrl = new URL(rawArtwork);
+        if (imageUrl.protocol === 'https:' && !imageUrl.username && !imageUrl.password && ['lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'i.ytimg.com'].includes(imageUrl.hostname) && rawArtwork.length <= 4096) {
+          artwork = rawArtwork.replace(/=w\d+-h\d+[^?]*$/, '=w544-h544');
+        }
+      } catch (_) { /* Use the video thumbnail when Music has no artwork. */ }
+      const fanVersion = /\b(slowed|reverb|nightcore|sped\s*up|speed\s*up|8d\s*audio|fan[ -]?made|fan\s*edit|pitch(?:ed)?\s*(?:up|down)|bass\s*boosted|karaoke|unofficial)\b|[([]cover[)\]]|\bcover\s+(?:by|of|version)\b/i;
+      if (!/^[A-Za-z0-9_-]{11}$/.test(id) || seen.has(id) || !title || !artist || !duration || duration > 1200 || /\blive\b/i.test(segments.join(' ')) || fanVersion.test(title)) return null;
+      seen.add(id);
+      const haystack = `${title} ${artist}`.toLocaleLowerCase();
+      const hits = terms.filter(term => haystack.includes(term)).length;
+      if (!hits) return null;
+      const versionPenalty = /\b(remix|instrumental|edit|remaster)\b/i.test(title) && !/\b(remix|instrumental|edit|remaster)\b/i.test(query) ? 14 : 0;
+      return { videoId: id, title, artist, duration, artwork, source: 'YouTube Music', score: 40 - index + hits * 5 - versionPenalty };
+    }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 30);
+    const response = { ok: true, songs };
+    youtubeMusicSearchCache.set(key, { at: Date.now(), result: response });
+    if (youtubeMusicSearchCache.size > 50) youtubeMusicSearchCache.delete(youtubeMusicSearchCache.keys().next().value);
+    return response;
+  })().catch(error => ({ ok: false, error: error.message || 'YouTube Music search failed.' })).finally(() => youtubeMusicSearchInFlight.delete(key));
+  youtubeMusicSearchInFlight.set(key, task);
+  return task;
 });
 
 registerIpcHandler('dialog:openCookiesFile', async () => {
@@ -1806,6 +2098,7 @@ const PLAYLISTS_FILE = path.join(app.getPath('userData'), 'playlists.json');
 const DOWNLOAD_RECOVERY_FILE = path.join(app.getPath('userData'), 'download-recovery.json');
 const MAPPINGS_FILE = path.join(app.getPath('userData'), 'mappings.json');
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
+configureDiscordCoverCache(path.join(app.getPath('userData'), 'discord-cover-cache.json'));
 const LISTENING_STATS_FILE = path.join(app.getPath('userData'), 'listening-stats.json');
 const LIKED_SONGS_FILE = path.join(app.getPath('userData'), 'liked-songs.json');
 const RESTORE_MANIFEST_FILE = path.join(app.getPath('userData'), '.backup-restore-transaction.json');
@@ -3061,6 +3354,8 @@ function initializeRadioStreamResolver() {
   });
   cache.hydrate(readJsonFile(RADIO_MATCH_CACHE_FILE, []));
   radioStreamResolver = createRadioStreamResolver({
+    enableFastStream: true,
+    onPrepareMetrics(metrics) { console.info('YouTube stream resolution', metrics); },
     matchCache: cache,
     runYtdlp: runRadioYtdlp,
     cancel: cancelRadioResolverRequest,
@@ -3088,6 +3383,10 @@ function registerRadioStreamProtocol() {
       const response = await net.fetch(lease.url, { method: 'GET', headers, redirect: 'error' });
       const forward = new Headers();
       ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control'].forEach((key) => { const value = response.headers.get(key); if (value) forward.set(key, value); });
+      // MediaElementAudioSourceNode outputs silence for a cross-origin media
+      // resource unless the element loads it with CORS and the proxy allows it.
+      forward.set('access-control-allow-origin', '*');
+      forward.set('access-control-expose-headers', 'Content-Length, Content-Range, Accept-Ranges');
       return new Response(response.body, { status: response.status, headers: forward });
     } catch (error) {
       console.warn('Radio stream proxy error:', error && error.message ? error.message : error);
@@ -4227,7 +4526,7 @@ registerIpcHandler('load-settings', () => {
   loadSettingsFromDisk();
   if (settingsLoadError) throw settingsLoadError;
   if (appSettings && appSettings.discordRpc) {
-    discordConnect();
+    reconcileDiscordRuntime(true);
   }
   const rendererSettings = { ...redactLastfmCredentials(appSettings), lastfmConnected: !!appSettings.lastfmSessionKey };
   delete rendererSettings.listeningStats;
@@ -4258,6 +4557,7 @@ registerIpcHandler('save-settings', async (event, settings) => {
   if (backupRestoreInProgress || movedFileRelinkCommitInProgress || !settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
   try {
     const wasDiscord = appSettings.discordRpc;
+    const previousDiscordApplicationId = appSettings.discordApplicationId || '';
     const wasAutomaticBackupsEnabled = appSettings.automaticBackupsEnabled === true;
     if (Object.prototype.hasOwnProperty.call(settings, 'automaticBackupsEnabled') && typeof settings.automaticBackupsEnabled !== 'boolean') return false;
     // Renderer settings are redacted. Merge ordinary settings while retaining
@@ -4280,8 +4580,11 @@ registerIpcHandler('save-settings', async (event, settings) => {
       else cancelAutomaticBackupSchedule();
     }
     // Handle Discord toggle
-    if (validatedSettings.discordRpc && !wasDiscord) discordConnect();
-    else if (!validatedSettings.discordRpc && wasDiscord) { discordClear(); if (discordClient) { try { discordClient.destroy(); } catch (e) { /* A disconnected RPC client needs no further teardown. */ } discordClient = null; discordEnabled = false; } }
+    if (validatedSettings.discordRpc !== wasDiscord) await reconcileDiscordRuntime(validatedSettings.discordRpc);
+    else if (validatedSettings.discordRpc && (validatedSettings.discordApplicationId || '') !== previousDiscordApplicationId) {
+      resetDiscordConnection();
+      await discordConnect();
+    }
     return true;
   }
   catch (e) { console.error('Failed to save settings:', e); return false; }
@@ -4306,15 +4609,34 @@ registerIpcHandler('clear-sensitive-setting', async (event, key) => {
 });
 
 // Discord RPC IPC handlers
-registerIpcHandler('discord-update', async (event, title, artist, album, startTime) => {
-  await discordSetActivity(title, artist, album, startTime);
+registerIpcHandler('discord-update', async (event, title, artist, album, startTime, artworkUrl, durationMs, trackMbid, playbackState) => {
+  await discordSetActivity(title, artist, album, startTime, artworkUrl, durationMs, trackMbid, playbackState);
   return true;
 });
 registerIpcHandler('discord-clear', async () => {
   await discordClear();
   return true;
 });
-registerIpcHandler('discord-status', () => { return { enabled: discordEnabled, error: discordLastError }; });
+registerIpcHandler('discord-status', () => {
+  const mode = appSettings.discordArtworkSource || 'lookup';
+  const candidate = mode === 'lookup' ? (discordCoverUrl || discordDesiredActivity && discordDesiredActivity[4] || '') : mode === 'online' && discordDesiredActivity ? discordDesiredActivity[4] : '';
+  return { enabled: discordEnabled, connecting: !!discordConnecting, error: discordLastError, playback: discordPlaybackState, artwork: discordCoverState, imageIsFallback: discordArtworkUrl(candidate) === DISCORD_DEFAULT_ARTWORK_URL };
+});
+registerIpcHandler('discord-reconnect', async () => {
+  if (!appSettings.discordRpc) return false;
+  resetDiscordConnection();
+  await discordConnect();
+  return discordEnabled;
+});
+registerIpcHandler('discord-retry-artwork', () => {
+  if (!discordDesiredActivity || !appSettings.discordRpc) return false;
+  cancelDiscordCoverLookup();
+  discordCoverKey = '';
+  discordCoverState = { status: 'idle', source: '', error: '' };
+  discordCoverRefreshOnce = true;
+  void discordSetActivity(...discordDesiredActivity);
+  return true;
+});
 
 registerIpcHandler('get-metadata', async (event, filePath) => {
   filePath = normalizePathInput(filePath);

@@ -19,7 +19,7 @@ let state = {
   sourcePlaylistId: null, radioSession: null,
   currentPlaybackPreservesQueueCursors: false, currentRadioHistoryPlayback: false
 };
-const DEFAULT_APP_SETTINGS = { minimizeToTray: false, audioMode: 'stereo', sidebarWidth: 560, glassEffects: true, isPlaylistGridView: true, dockMode: 'collapsed', ytdlDownloadFolder: '', ytdlDownloadQuality: 'best-native', ytdlCookiesMode: 'none', ytdlCookiesBrowser: 'firefox', ytdlCookiesFile: '', automaticBackupsEnabled: true, radioPreferences: window.RadioPreferences ? window.RadioPreferences.sanitizeRadioPreferences() : {}, radioBlocklist: window.RadioPreferences ? window.RadioPreferences.sanitizeRadioBlocklist() : { version: 1, tracks: [], artists: [] } };
+const DEFAULT_APP_SETTINGS = { minimizeToTray: false, audioMode: 'stereo', audioOutputDeviceId: '', discordApplicationId: '1563774809563988080', discordArtworkSource: 'lookup', discordShowProgress: true, discordShowPaused: false, discordTextFormat: 'title-artist', sidebarWidth: 560, glassEffects: true, isPlaylistGridView: true, dockMode: 'collapsed', ytdlDownloadFolder: '', ytdlDownloadQuality: 'best-native', ytdlCookiesMode: 'none', ytdlCookiesBrowser: 'firefox', ytdlCookiesFile: '', automaticBackupsEnabled: true, radioPreferences: window.RadioPreferences ? window.RadioPreferences.sanitizeRadioPreferences() : {}, radioBlocklist: window.RadioPreferences ? window.RadioPreferences.sanitizeRadioBlocklist() : { version: 1, tracks: [], artists: [] } };
 let appSettings = Object.assign({}, DEFAULT_APP_SETTINGS);
 let audioCtx, audioGainNode, audioCompressor;
 let currentContextMenuTrack = null;
@@ -35,6 +35,7 @@ let queueDragInProgress = false;
 let lyricsOpen = false;
 let lyricsCurrentTrackKey = null;
 let lyricsData = [];
+let lyricsRawText = '';
 let plainLyricsText = '';
 let lyricsOffsetSec = 0;
 let lyricsActiveIdx = -2;
@@ -129,6 +130,8 @@ let crossfadeStopTimer = null;
 let playbackSeekActive = false;
 let pendingPlaybackTrack = null;
 let crossfadeSuppressedTrack = null;
+let preparedLocalSlot = null;
+let localGaplessFrame = null;
 let lastPlaybackSessionCheckpointAt = 0;
 let metadataWriteLockedPaths = new Set();
 let libraryScanGeneration = 0;
@@ -696,6 +699,7 @@ function hideModal(el, options) {
 function requestCloseModal(el) {
   if (!el) return;
   if (el.id === 'playlist-import-modal') { var pic = $('playlist-import-cancel-x') || $('playlist-import-cancel'); if (pic) pic.click(); return; }
+  if (el.id === 'playlist-import-source-modal') { var pis = $('playlist-import-source-cancel'); if (pis) pis.click(); return; }
   if (el.id === 'album-download-modal') { closeAlbumDownloadModal(); return; }
   if (el.id === 'add-songs-modal') { var asc = $('btn-close-add-songs'); if (asc) asc.click(); return; }
   if (el.id === 'delete-confirm-modal') { var dc = $('delete-cancel-btn'); if (dc) dc.click(); return; }
@@ -703,6 +707,7 @@ function requestCloseModal(el) {
   if (el.id === 'metadata-modal') { var mc = $('meta-cancel-btn'); if (mc && !mc.disabled) mc.click(); return; }
   if (el.id === 'moved-files-modal') { var movedCancel = $('moved-files-cancel'); if (movedCancel && !movedCancel.disabled) movedCancel.click(); return; }
   if (el.id === 'command-palette-modal') { closeCommandPalette(); return; }
+  if (el.id === 'lyrics-editor-modal') { closeLyricsEditor(); return; }
   hideModal(el);
 }
 
@@ -726,11 +731,13 @@ function hideAllContextMenus(restoreFocus) {
 function openSettingsModal() {
   var modal = $('settings-modal');
   showModal(modal);
+  if (typeof showSettingsPage === 'function') showSettingsPage(typeof activeSettingsPage === 'string' ? activeSettingsPage : 'library');
   var content = modal ? modal.querySelector('.modal-content') : null;
   if (content) content.scrollTop = 0;
   if (typeof refreshSafeStorageStatus === 'function') refreshSafeStorageStatus();
   if (typeof refreshDownloadFolderUi === 'function') refreshDownloadFolderUi();
   if (typeof refreshAutomaticBackupStatus === 'function') refreshAutomaticBackupStatus();
+  if (typeof refreshAudioOutputDevices === 'function') refreshAudioOutputDevices();
 }
 function deepCloneForUndo(value) {
   if (value === undefined) return undefined;
@@ -1015,6 +1022,7 @@ function initAudioCtx() {
       updateAudioChain();
     }
     applyAudioMode();
+    audioOutputReady = applyAudioOutputPreference();
   }
   if (audioCtx.state === 'suspended') audioCtx.resume();
 }
@@ -1500,7 +1508,7 @@ function setViewKind(kind) {
   syncDockPlaylistStates();
 }
 function hideAllViewRoots() {
-  ['home-dashboard-container', 'albums-grid-container', 'tracks-table-container', 'search-albums-container', 'playlists-grid-container', 'stats-container', 'metadata-health-container', 'radio-container'].forEach(function (id) {
+  ['home-dashboard-container', 'albums-grid-container', 'tracks-table-container', 'search-albums-container', 'playlists-grid-container', 'stats-container', 'metadata-health-container', 'radio-container', 'youtube-music-results'].forEach(function (id) {
     var el = $(id); if (el) el.style.display = 'none';
   });
   var detail = $('album-detail-header'); if (detail) detail.style.display = 'none';

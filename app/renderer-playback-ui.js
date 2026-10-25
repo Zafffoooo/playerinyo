@@ -105,6 +105,11 @@ async function applyRuntimeSettings(options) {
     ['setting-minimize', 'checked', !!appSettings.minimizeToTray],
     ['setting-audio-mode', 'value', appSettings.audioMode || 'stereo'],
     ['setting-discord-rpc', 'checked', !!appSettings.discordRpc],
+    ['setting-discord-application-id', 'value', appSettings.discordApplicationId || DEFAULT_APP_SETTINGS.discordApplicationId],
+    ['setting-discord-artwork-source', 'value', appSettings.discordArtworkSource || 'lookup'],
+    ['setting-discord-progress', 'checked', appSettings.discordShowProgress !== false],
+    ['setting-discord-paused', 'checked', !!appSettings.discordShowPaused],
+    ['setting-discord-text-format', 'value', appSettings.discordTextFormat || 'title-artist'],
     ['setting-discogs-token', 'value', appSettings.discogsToken || ''],
     ['setting-normalization', 'checked', !!appSettings.normalization],
     ['setting-notifications', 'checked', appSettings.notifications !== false],
@@ -131,15 +136,10 @@ async function applyRuntimeSettings(options) {
     applyAudioMode();
   }
   if (audioGainNode) audioGainNode.gain.value = masterGain / 100;
+  if (audioCtx) audioOutputReady = applyAudioOutputPreference();
+  refreshAudioOutputDevices();
   setVolumeLevel(appSettings.volume === undefined ? 1 : appSettings.volume, false);
-  if (appSettings.discordRpc && window.api.discordStatus) {
-    window.api.discordStatus().then(function (result) {
-      var status = $('discord-status-text');
-      if (status) status.textContent = result && result.enabled ? 'Connected' : 'Could not connect: ' + ((result && result.error) || 'Discord not running');
-    }).catch(function (e) { console.error('Discord status failed:', e); });
-  } else {
-    var discordStatus = $('discord-status-text'); if (discordStatus) discordStatus.textContent = 'Disconnected';
-  }
+  if (typeof refreshDiscordHealth === 'function') refreshDiscordHealth();
 }
 
 function hydrateSessionTrackList(value) {
@@ -177,6 +177,7 @@ function prepareRestoredPlaybackPosition(positionSeconds) {
   var restoreToken = ++playbackRestoreToken;
   audio._playbackRestoreToken = restoreToken;
   audio._restoringSession = true;
+  audio.removeAttribute('crossorigin');
   audio.src = expectedSrc;
   var clearPreparingState = function () {
     if (audio._playbackRestoreToken === restoreToken) audio._restoringSession = false;
@@ -453,21 +454,39 @@ function startNPSlideshow() {
   clearInterval(_npSlideshowTimer);
   if (!npOverlayOpen || !state.npSlideImages || state.npSlideImages.length < 2) return; // only if multiple images
   var slideshowGeneration = playbackGeneration;
+  var slideshowTrack = state.currentPlayingTrack;
   _npSlideshowTimer = setInterval(function () {
-    if (!npOverlayOpen || slideshowGeneration !== playbackGeneration) { clearInterval(_npSlideshowTimer); _npSlideshowTimer = null; return; }
+    if (!npOverlayOpen || slideshowGeneration !== playbackGeneration || state.currentPlayingTrack !== slideshowTrack) { clearInterval(_npSlideshowTimer); _npSlideshowTimer = null; return; }
     state.npSlideIdx = (state.npSlideIdx + 1) % state.npSlideImages.length;
     var img = state.npSlideImages[state.npSlideIdx];
     var artEl = document.getElementById('np-art');
     var bgEl = document.getElementById('np-bg-blur');
     if (artEl) {
-      artEl.style.opacity = '0';
-      setTimeout(function () {
-        if (!npOverlayOpen || slideshowGeneration !== playbackGeneration) return;
-        artEl.src = img;
+      var candidate = new Image();
+      candidate.onload = function () {
+        if (!npOverlayOpen || slideshowGeneration !== playbackGeneration || state.currentPlayingTrack !== slideshowTrack) return;
+        artEl.style.opacity = '0';
+        setTimeout(function () {
+          if (!npOverlayOpen || slideshowGeneration !== playbackGeneration || state.currentPlayingTrack !== slideshowTrack) return;
+          artEl.src = img;
+          artEl.style.display = 'block';
+          artEl.style.opacity = '1';
+          var placeholder = document.getElementById('np-art-placeholder');
+          if (placeholder) placeholder.style.display = 'none';
+        }, 350);
+      };
+      candidate.onerror = function () {
+        if (slideshowGeneration !== playbackGeneration || state.currentPlayingTrack !== slideshowTrack) return;
         artEl.style.opacity = '1';
-      }, 350);
+        if (!artEl.naturalWidth) {
+          artEl.style.display = 'none';
+          var placeholder = document.getElementById('np-art-placeholder');
+          if (placeholder) placeholder.style.display = 'flex';
+        }
+      };
+      candidate.src = img;
     }
-    if (bgEl) bgEl.style.backgroundImage = 'url(' + img + ')';
+    if (bgEl) bgEl.style.backgroundImage = '';
   }, 8000); // switch every 8 seconds
 }
 
@@ -1528,6 +1547,7 @@ function initPlaybackControls() {
   audioEls.forEach(function (audioEl) {
     audioEl.addEventListener('ended', async function () {
       if (audioEl !== audioEls[activeAudioIdx]) return;
+      cancelLocalGaplessFrame();
       if (playbackTransitionPending) return;
       if (state.loopMode === 2) {
         // Repeat-one restarts the same track object without going through
@@ -1539,6 +1559,7 @@ function initPlaybackControls() {
         cancelCrossfadeTransition(true);
         audioEl.currentTime = 0;
         try {
+          await ensureAudioOutputReady();
           await audioEl.play();
           if (generation !== playbackGeneration || audioEl !== audioEls[activeAudioIdx]) return;
           playbackTransitionPending = false;
@@ -1567,12 +1588,19 @@ function initPlaybackControls() {
     });
     audioEl.addEventListener('pause', function () {
       if (audioEl !== audioEls[activeAudioIdx] || playbackTransitionPending || audioEl.ended || !state.isPlaying) return;
+      cancelLocalGaplessFrame();
       cancelCrossfadeTransition(false);
       audioEls.forEach(function (otherAudio) { if (otherAudio !== audioEl && !otherAudio.paused) otherAudio.pause(); });
       state.isPlaying = false;
       pauseLastfmScrobbleCycle(false);
       checkpointPlaybackSession(audioEl, 200);
       syncPlaybackStateUi();
+    });
+    audioEl.addEventListener('seeked', function () {
+      if (audioEl === audioEls[activeAudioIdx] && state.currentPlayingTrack) syncDiscordPlaybackActivity(true);
+    });
+    audioEl.addEventListener('durationchange', function () {
+      if (audioEl === audioEls[activeAudioIdx] && state.isPlaying) syncDiscordPlaybackActivity(true);
     });
     audioEl.addEventListener('error', function () {
       if (audioEl !== audioEls[activeAudioIdx]) return;
@@ -1608,6 +1636,7 @@ function initPlaybackControls() {
 
         var cfDuration = appSettings.crossfade ? parseInt(appSettings.crossfade, 10) : 0;
         var remaining = audioEl.duration - audioEl.currentTime;
+        if (remaining <= 1 && localGaplessFrame === null && cfDuration === 0) checkLocalGaplessBoundary(audioEl);
         // Skip early-advance on repeat-one; the ended handler restarts the track instead
         if (cfDuration > 0 && remaining <= cfDuration && state.isPlaying && !audioEl.paused && crossfadeSuppressedTrack !== state.currentPlayingTrack && !state.crossfadingNext && !playbackTransitionPending && !crossfadeActive && !playbackSeekActive && state.loopMode !== 2) {
           var nextSelection = getNextTrackSelection();
@@ -1751,7 +1780,9 @@ function bootstrap() {
   initLibraryControls();
   initPlaybackDownloadControls();
   initDownloadControls();
+  initImportReviewControls();
   initLyricsControls();
+  initAudioOutputControls();
   initSettingsControls();
   initMetadataControls();
   initPlaybackControls();

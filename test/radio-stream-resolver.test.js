@@ -2,7 +2,30 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { DurableMatchCache, RuntimeLeaseCache } = require('../app/radio-stream-cache');
-const { chooseAudioFormat, parseSearchPayload, createRadioStreamResolver } = require('../app/radio-stream-resolver');
+const { chooseAudioFormat, parseSearchPayload, fastStreamArgs, createRadioStreamResolver } = require('../app/radio-stream-resolver');
+test('fast stream uses only a fresh HTTPS audio URL and falls back otherwise', async () => {
+  const calls = []; const metrics = [];
+  const owner = { stationId: 's', queueEntryId: 'q', generation: 1 };
+  const resolver = createRadioStreamResolver({ enableFastStream: true, now: () => 100000, onPrepareMetrics: value => metrics.push(value), runYtdlp: async args => {
+    calls.push(args);
+    if (args.includes('--print')) return { url: 'https://r.googlevideo.com/a?expire=500', acodec: 'aac', vcodec: 'none', ext: 'm4a' };
+    return { formats: [{ url: 'https://r.googlevideo.com/b?expire=600', acodec: 'aac', vcodec: 'none', ext: 'm4a' }] };
+  } });
+  await resolver.prepare('abcdefghijk', owner, 'fast');
+  assert.equal(calls.length, 1); assert.equal(metrics[0].mode, 'fast');
+  assert.ok(fastStreamArgs('abcdefghijk').includes('--print'));
+  const fallback = createRadioStreamResolver({ enableFastStream: true, now: () => 100000, runYtdlp: async args => args.includes('--print')
+    ? { url: 'http://bad.example/a?expire=500', acodec: 'aac', vcodec: 'none', ext: 'm4a' }
+    : { formats: [{ url: 'https://r.googlevideo.com/b?expire=600', acodec: 'aac', vcodec: 'none', ext: 'm4a' }] } });
+  const prepared = await fallback.prepare('abcdefghijk', owner, 'fallback');
+  assert.match(prepared.src, /^playerinyo-stream:\/\/lease\//);
+});
+test('cancelled fast preparation does not start detailed extraction', async () => {
+  let calls = 0;
+  const resolver = createRadioStreamResolver({ enableFastStream: true, runYtdlp: async () => { calls++; throw new Error('Radio resolver request cancelled.'); } });
+  await assert.rejects(resolver.prepare('abcdefghijk', { stationId: 's', queueEntryId: 'q', generation: 1 }, 'cancel'), /cancelled/);
+  assert.equal(calls, 1);
+});
 
 test('durable cache only serializes stable video identity', () => {
   const cache = new DurableMatchCache({ now: () => 100 });
@@ -31,6 +54,26 @@ test('resolver caches video identity and creates no URL until prepare', async ()
   const resolved = await resolver.resolveCandidate(candidate, 'one'); assert.equal(resolved.videoId, 'abcdefghijk');
   const prepared = await resolver.prepare(resolved.videoId, { stationId: 's', queueEntryId: 'q', generation: 1 }, 'two');
   assert.match(prepared.src, /^playerinyo-stream:\/\/lease\//); assert.equal(calls, 2);
+});
+test('replaying a video reuses a fresh stream source but creates a separate lease', async () => {
+  let time = 100_000;
+  let extractions = 0;
+  const resolver = createRadioStreamResolver({
+    now: () => time,
+    runYtdlp: async () => {
+      extractions++;
+      return { formats: [{ url: `https://r.googlevideo.com/audio?expire=${Math.ceil((time + 120_000) / 1000)}`, acodec: 'aac', vcodec: 'none', ext: 'm4a' }] };
+    },
+  });
+  const owner = { stationId: 's', queueEntryId: 'first', generation: 1 };
+  const first = await resolver.prepare('abcdefghijk', owner, 'one');
+  const second = await resolver.prepare('abcdefghijk', { ...owner, queueEntryId: 'second' }, 'two');
+  assert.equal(extractions, 1);
+  assert.notEqual(first.leaseId, second.leaseId);
+  assert.ok(resolver.getLease(second.leaseId, { ...owner, queueEntryId: 'second' }));
+  time = first.expiresAt - 29_000;
+  await resolver.prepare('abcdefghijk', owner, 'three');
+  assert.equal(extractions, 2);
 });
 test('high-confidence exact official result short-circuits remaining search variants', async () => {
   let searches = 0;

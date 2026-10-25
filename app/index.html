@@ -94,6 +94,8 @@
               <button type="button" class="global-search-clear" id="global-search-clear" aria-label="Clear search" hidden><i class="ph ph-x" aria-hidden="true"></i></button>
               <span class="sr-only" id="global-search-help">Search tracks, albums, and artists. Filters: artist:, album:, title: or song:, genre:, year:, missing:cover, rg:missing, type: or ext:, path:, liked:true, albumrating:10 (rating is measured from 0 to 10), albums:liked.</span>
             </div>
+            <div class="search-source-picker"><select id="global-search-source" aria-label="Search source" tabindex="-1"><option value="library">Library</option><option value="youtube-music">YouTube Music</option></select><button type="button" id="global-search-source-button" class="search-source-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="global-search-source-list">Library <i class="ph ph-caret-down" aria-hidden="true"></i></button><div id="global-search-source-list" class="search-source-list" role="listbox" aria-label="Search source" hidden><button type="button" role="option" data-source="library" aria-selected="true">Library</button><button type="button" role="option" data-source="youtube-music" aria-selected="false">YouTube Music</button></div></div>
+            <button type="button" class="btn btn-outline" id="global-search-submit">Search</button>
           </div>
           <div class="header-right main-header-actions">
             <div id="zoom-controls" style="display:none;align-items:center;background:#242424;border-radius:20px;padding:3px 6px;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
@@ -132,6 +134,7 @@
           <!-- Stats Dashboard (standalone - kept for programmatic use) -->
           <div id="stats-container" style="display:none;padding:24px;padding-bottom:60px;"></div>
           <div id="metadata-health-container" style="display:none;padding:24px;padding-bottom:60px;"></div>
+          <section id="youtube-music-results" class="youtube-music-results" hidden aria-live="polite"></section>
           <section id="radio-container" class="radio-view" style="display:none;" aria-labelledby="radio-title"></section>
 
           <section id="playlists-grid-container" class="playlist-workspace" style="display:none;" aria-labelledby="playlists-workspace-title">
@@ -144,7 +147,6 @@
                 <button class="btn btn-outline" id="import-playlist-btn"><i class="ph ph-file-arrow-up" aria-hidden="true"></i> Import Playlist</button>
                 <button class="btn btn-outline" id="create-smart-mix-btn"><i class="ph ph-sparkle" aria-hidden="true"></i> New Smart Playlist</button>
                 <button class="btn btn-primary" id="create-playlist-btn"><i class="ph ph-plus" aria-hidden="true"></i> New playlist</button>
-                <button class="icon-btn ghost" id="btn-fullscreen-playlists" title="Close playlists" aria-label="Close playlists"><i class="ph ph-x" aria-hidden="true"></i></button>
               </div>
             </header>
             <label class="playlist-workspace-search" for="playlist-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="search" id="playlist-search" placeholder="Search playlists" /></label>
@@ -428,7 +430,7 @@
                   <span id="lyrics-offset-val">0.0s</span>
                   <button class="icon-btn" id="btn-lyrics-offset-up" title="Lyrics +0.5s">+</button>
                   <button class="icon-btn" id="btn-lyrics-load-file" title="Load .lrc file"><i class="ph ph-file-text" aria-hidden="true"></i></button>
-                  <button class="icon-btn" id="btn-lyrics-paste" title="Paste lyrics" aria-label="Paste lyrics"><i class="ph ph-clipboard-text" aria-hidden="true"></i></button>
+                  <button class="icon-btn" id="btn-lyrics-paste" title="Edit lyrics" aria-label="Edit lyrics"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button>
                   <button class="icon-btn" id="btn-lyrics-retry" title="Retry lyrics search" aria-label="Retry lyrics search"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
                   <button class="icon-btn" id="btn-lyrics-web-search" title="Search lyrics on the web" aria-label="Search lyrics on the web"><i class="ph ph-globe" aria-hidden="true"></i></button>
                   <button class="icon-btn" id="btn-close-lyrics" aria-label="Close lyrics"><i class="ph ph-x" aria-hidden="true"></i></button>
@@ -454,9 +456,9 @@
     <!-- Top bar -->
     <div class="np-topbar">
       <span class="np-label">Now Playing</span>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <button class="icon-btn" id="np-queue-toggle" aria-label="Show queue" aria-expanded="false" aria-controls="np-queue-content" style="color:rgba(255,255,255,0.6);width:36px;height:36px;"><i class="ph ph-queue" aria-hidden="true"></i></button>
-        <button class="icon-btn" id="np-lyrics-toggle" aria-label="Show lyrics" aria-expanded="true" aria-controls="np-lyrics-col" style="color:rgba(255,255,255,0.6);width:36px;height:36px;"><i class="ph ph-microphone-stage" aria-hidden="true"></i></button>
+      <div class="np-top-actions">
+        <button type="button" class="icon-btn np-panel-toggle" id="np-queue-toggle" title="Queue" aria-label="Show queue" aria-controls="np-lyrics-col" aria-expanded="false"><i class="ph ph-queue" aria-hidden="true"></i></button>
+        <button type="button" class="icon-btn np-panel-toggle" id="np-lyrics-toggle" title="Lyrics" aria-label="Hide lyrics" aria-controls="np-lyrics-col" aria-expanded="true"><i class="ph ph-microphone-stage" aria-hidden="true"></i></button>
         <button class="icon-btn" id="np-close-btn" title="Close (N)" style="color:rgba(255,255,255,0.6);width:36px;height:36px;"><i class="ph ph-x"></i></button>
       </div>
     </div>
@@ -506,13 +508,10 @@
 
       <!-- Right: queue or lyrics, both reuse the primary playback state. -->
       <div class="np-lyrics-col" id="np-lyrics-col">
-        <div class="np-secondary-tabs" role="tablist" aria-label="Now Playing panel">
-          <button type="button" class="np-secondary-tab" id="np-queue-tab" role="tab" aria-controls="np-queue-content" aria-selected="false">Queue</button>
-          <button type="button" class="np-secondary-tab active" id="np-lyrics-tab" role="tab" aria-controls="np-lyrics-content" aria-selected="true">Lyrics</button>
-        </div>
         <div class="np-queue-content" id="np-queue-content" role="tabpanel" aria-label="Playback queue" hidden></div>
         <div class="np-lyrics-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
           <span>Lyrics</span>
+          <button type="button" class="icon-btn" id="np-lyrics-edit" title="Edit lyrics" aria-label="Edit lyrics"><i class="ph ph-pencil-simple" aria-hidden="true"></i></button>
           <span style="display:flex;align-items:center;gap:4px;">
             <button class="icon-btn" id="np-lyrics-offset-down" title="Lyrics -0.5s" style="width:26px;height:26px;font-size:11px;color:rgba(255,255,255,.5);">-</button>
             <span id="np-lyrics-offset-val" style="min-width:34px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);">0.0s</span>
@@ -631,6 +630,19 @@
     </div>
   </div>
 
+  <div id="playlist-import-source-modal" class="modal-overlay">
+    <div class="modal-content playlist-source-modal">
+      <h2 id="playlist-import-source-title">Import Playlist</h2>
+      <div class="playlist-source-choice"><button type="button" class="btn btn-outline" id="playlist-import-file-choice">File</button><button type="button" class="btn btn-outline" id="playlist-import-link-choice">Link</button></div>
+      <div id="playlist-import-link-fields" hidden>
+        <label for="playlist-import-url">Public Spotify or YouTube Music playlist URL</label>
+        <input type="url" id="playlist-import-url" class="meta-inp" placeholder="https://music.youtube.com/playlist?list=…" autocomplete="off">
+        <p id="playlist-import-url-status" role="status" aria-live="polite"></p>
+        <button type="button" class="btn btn-primary" id="playlist-import-url-submit">Read playlist</button>
+      </div>
+      <button type="button" class="btn btn-outline" id="playlist-import-source-cancel">Cancel</button>
+    </div>
+  </div>
   <div id="playlist-import-modal" class="modal-overlay">
     <div class="modal-content playlist-import-modal" style="width:min(900px,calc(100vw - 48px));max-height:88vh;display:flex;flex-direction:column;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px;">
@@ -648,6 +660,7 @@
           <option value="replace">Replace existing tracks</option>
         </select>
       </div>
+      <fieldset id="playlist-import-group-choice" class="playlist-import-group-choice" hidden><legend>Playlists to import</legend><div id="playlist-import-group-list"></div></fieldset>
       <div class="playlist-import-toolbar" id="playlist-import-download-tools">
         <span class="playlist-import-toolbar-title">Download selected missing tracks</span>
         <button class="btn btn-outline" id="playlist-import-select-missing" style="width:auto;padding:7px 11px;border-radius:10px;font-size:12px;">Select missing</button>
@@ -725,13 +738,25 @@
 
   <!-- Settings Modal -->
   <div id="settings-modal" class="modal-overlay">
-    <div class="modal-content" style="width:480px;max-height:85vh;overflow-y:auto;">
+    <div class="modal-content settings-dialog">
       <div class="settings-modal-head">
         <h2 id="settings-title">Settings</h2>
         <button type="button" class="icon-btn" id="btn-close-settings-top" aria-label="Close settings"><i class="ph ph-x" aria-hidden="true"></i></button>
       </div>
-      <div class="settings-sections">
-      <details class="settings-section" name="settings-section">
+      <div class="settings-layout">
+        <nav class="settings-nav" aria-label="Settings sections">
+          <button type="button" class="settings-nav-item" data-settings-page="playback">Playback &amp; Audio</button>
+          <button type="button" class="settings-nav-item active" data-settings-page="library" aria-current="page">Music Library</button>
+          <button type="button" class="settings-nav-item" data-settings-page="downloads">Downloads</button>
+          <button type="button" class="settings-nav-item" data-settings-page="metadata">Metadata Sources</button>
+          <button type="button" class="settings-nav-item" data-settings-page="appearance">Appearance</button>
+          <button type="button" class="settings-nav-item" data-settings-page="discord">Discord</button>
+          <button type="button" class="settings-nav-item" data-settings-page="application">Application</button>
+          <button type="button" class="settings-nav-item" data-settings-page="performance">Performance</button>
+          <button type="button" class="settings-nav-item" data-settings-page="data">Backup &amp; Data</button>
+        </nav>
+      <div class="settings-sections" id="settings-sections">
+      <details class="settings-section" name="settings-section" data-settings-page="playback">
         <summary>Playback &amp; Audio</summary>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
@@ -742,11 +767,21 @@
         <input type="checkbox" class="setting-switch" id="setting-normalization" />
       </div>
       <div class="setting-item" style="margin-bottom:24px;">
-        <label for="setting-audio-mode">Audio Output</label>
+        <label for="setting-audio-mode">Audio Channels</label>
         <select id="setting-audio-mode" style="background:#333;color:white;padding:6px 12px;border:none;border-radius:4px;font-size:14px;">
           <option value="stereo">Stereo</option>
           <option value="mono">Mono</option>
         </select>
+      </div>
+      <div class="setting-item audio-device-setting">
+        <div>
+          <label for="setting-audio-device">Output Device</label>
+          <small id="audio-device-status" role="status">System default</small>
+        </div>
+        <div class="audio-device-controls">
+          <select id="setting-audio-device" aria-describedby="audio-device-status"><option value="">System default</option></select>
+          <button type="button" class="btn btn-outline" id="audio-device-choose" hidden>Find devices</button>
+        </div>
       </div>
       <div class="setting-item" style="margin-bottom:12px;">
         <label for="setting-crossfade">Crossfade</label>
@@ -768,7 +803,7 @@
         </div>
       </details>
 
-      <details class="settings-section" name="settings-section" open>
+      <details class="settings-section" name="settings-section" data-settings-page="library" open>
         <summary>Music Library</summary>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
@@ -794,7 +829,7 @@
         </div>
       </details>
 
-      <details class="settings-section" name="settings-section">
+      <details class="settings-section" name="settings-section" data-settings-page="downloads">
         <summary>Downloads</summary>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
@@ -840,7 +875,7 @@
         </div>
       </details>
 
-      <details class="settings-section" name="settings-section">
+      <details class="settings-section" name="settings-section" data-settings-page="metadata">
         <summary>Metadata Sources</summary>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
@@ -852,7 +887,7 @@
         </div>
       </details>
 
-      <details class="settings-section" name="settings-section">
+      <details class="settings-section" name="settings-section" data-settings-page="appearance">
         <summary>Appearance</summary>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
@@ -873,8 +908,8 @@
         </div>
       </details>
 
-      <details class="settings-section" name="settings-section">
-        <summary>Notifications &amp; Integrations</summary>
+      <details class="settings-section" name="settings-section" data-settings-page="application">
+        <summary>Application</summary>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
         <div>
@@ -886,23 +921,15 @@
 
       <div class="setting-item" style="margin-bottom:16px;">
         <div>
-          <label for="setting-discord-rpc">Discord Rich Presence</label>
-          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;" id="discord-status-text">Disconnected</div>
-        </div>
-        <input type="checkbox" class="setting-switch" id="setting-discord-rpc" />
-      </div>
-
-      <div class="setting-item" style="margin-bottom:16px;">
-        <div>
           <label for="setting-minimize">Minimize to Tray</label>
-          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Keep playback running from the system tray when the window is minimized.</div>
+          <div class="setting-help">Keep playback running from the system tray when the window is minimized.</div>
         </div>
         <input type="checkbox" class="setting-switch" id="setting-minimize" />
       </div>
       <div class="setting-item" style="margin-bottom:16px;flex-direction:column;align-items:flex-start;">
         <div>
           <label>Updates</label>
-          <div style="font-size:11px;color:var(--text-subdued);margin-top:2px;">Checks GitHub Releases at startup. Updates are never downloaded automatically.</div>
+          <div class="setting-help">Checks GitHub Releases at startup. Updates are never downloaded automatically.</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
           <button class="btn btn-outline" id="btn-check-app-update" type="button" style="width:auto;padding:7px 11px;border-radius:8px;font-size:12px;">Check for Updates</button>
@@ -912,7 +939,63 @@
         </div>
       </details>
 
-      <details class="settings-section" name="settings-section">
+      <details class="settings-section" name="settings-section" data-settings-page="discord">
+        <summary>Discord</summary>
+        <div class="settings-section-body">
+      <div class="setting-item" style="margin-bottom:16px;">
+        <div>
+          <label for="setting-discord-rpc">Discord Rich Presence</label>
+          <div class="setting-help">Share the track playing in Playerinyo.</div>
+        </div>
+        <input type="checkbox" class="setting-switch" id="setting-discord-rpc" />
+      </div>
+      <div class="discord-health" aria-live="polite">
+        <div><span>Connection</span><strong id="discord-status-text">Disconnected</strong></div>
+        <div><span>Playback</span><strong id="discord-playback-text">No track shared</strong></div>
+        <div><span>Artwork</span><strong id="discord-artwork-text">Not checked</strong></div>
+        <p id="discord-error-text" hidden></p>
+        <button type="button" class="text-link" id="btn-discord-open-artwork" hidden>Open matched cover</button>
+        <button type="button" class="btn btn-outline" id="btn-discord-retry" hidden>Retry connection</button>
+        <button type="button" class="btn btn-outline" id="btn-discord-artwork-retry" hidden>Retry artwork search</button>
+      </div>
+      <div class="setting-item">
+        <label for="setting-discord-artwork-source">Artwork</label>
+        <select id="setting-discord-artwork-source" class="meta-inp">
+          <option value="lookup">Find matching cover online</option>
+          <option value="online">Use existing online cover</option>
+          <option value="logo">Playerinyo icon</option>
+        </select>
+      </div>
+      <div class="setting-item">
+        <div><label for="setting-discord-progress">Progress bar</label><div class="setting-help">Show elapsed and remaining track time.</div></div>
+        <input type="checkbox" class="setting-switch" id="setting-discord-progress" checked />
+      </div>
+      <div class="setting-item">
+        <div><label for="setting-discord-paused">Show paused tracks</label><div class="setting-help">Keep a paused status on Discord until playback resumes.</div></div>
+        <input type="checkbox" class="setting-switch" id="setting-discord-paused" />
+      </div>
+      <div class="setting-item">
+        <label for="setting-discord-text-format">Text order</label>
+        <select id="setting-discord-text-format" class="meta-inp">
+          <option value="title-artist">Track · Artist</option>
+          <option value="artist-title">Artist · Track</option>
+        </select>
+      </div>
+      <details class="settings-subsection discord-advanced">
+        <summary>Advanced</summary>
+        <div class="setting-item" style="align-items:flex-start;">
+        <div style="min-width:0;flex:1;">
+          <label for="setting-discord-application-id">Discord Application ID</label>
+          <div class="setting-help">Playerinyo's ID is ready. Change it only for your own Discord application.</div>
+          <input type="text" class="meta-inp" id="setting-discord-application-id" inputmode="numeric" autocomplete="off" spellcheck="false" maxlength="20" pattern="[0-9]{17,20}" placeholder="17–20 digit Application ID" aria-describedby="discord-status-text" style="width:100%;" />
+          <button type="button" class="text-link" id="btn-discord-developer-portal" style="margin-top:7px;">Open Discord Developer Portal</button>
+        </div>
+      </div>
+      </details>
+        </div>
+      </details>
+
+      <details class="settings-section" name="settings-section" data-settings-page="performance">
         <summary>Performance</summary>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
@@ -933,7 +1016,7 @@
         </div>
       </details>
 
-      <details class="settings-section" name="settings-section">
+      <details class="settings-section" name="settings-section" data-settings-page="data">
         <summary>Backup &amp; Restore</summary>
         <div class="settings-section-body">
       <div class="backup-automation">
@@ -969,7 +1052,7 @@
         </div>
       </details>
 
-      <details class="settings-section danger-zone" name="settings-section">
+      <details class="settings-section danger-zone" name="settings-section" data-settings-page="data">
         <summary>Danger Zone</summary>
         <div class="settings-section-body">
           <p>Clearing removes Playerinyo's local index. Audio files and playlists stay untouched, and you can undo the change during this session.</p>
@@ -978,6 +1061,7 @@
           </button>
         </div>
       </details>
+      </div>
       </div>
       <button class="btn btn-primary" id="btn-close-settings" style="width:100%;justify-content:center;">Done</button>
     </div>
@@ -1108,6 +1192,7 @@
     <button type="button" class="menu-item" id="ctx-analyze-loudness" role="menuitem"><i class="ph ph-waveform"></i> Analyze Loudness</button>
     <button type="button" class="menu-item" id="ctx-open-folder" role="menuitem"><i class="ph ph-folder-open"></i> Open File Location</button>
     <button type="button" class="menu-item is-accent" id="ctx-download-track" role="menuitem" hidden><i class="ph ph-download-simple"></i> Download Track…</button>
+    <button type="button" class="menu-item" id="ctx-select-version" role="menuitem" hidden><i class="ph ph-vinyl-record"></i> Choose another version…</button>
     <button type="button" class="menu-item is-accent" id="ctx-manual-match" role="menuitem"><i class="ph ph-link"></i> Manual Match…</button>
     <button type="button" class="menu-item is-warning" id="ctx-remove-match" role="menuitem" hidden><i class="ph ph-link-break"></i> Remove Match</button>
     <div class="menu-separator" role="separator"></div>
@@ -1118,6 +1203,7 @@
   <div id="playlist-context-menu" class="context-menu" role="menu" aria-label="Playlist actions">
     <button type="button" class="menu-item is-accent" id="pctx-add-songs" role="menuitem">Add Songs…</button>
     <button type="button" class="menu-item is-accent" id="pctx-download-missing" role="menuitem" hidden>Download Missing Tracks…</button>
+    <button type="button" class="menu-item" id="pctx-reimport" role="menuitem" hidden>Reimport from source…</button>
     <button type="button" class="menu-item" id="pctx-rename" role="menuitem">Rename</button>
     <button type="button" class="menu-item" id="pctx-cover" role="menuitem">Change Cover</button>
     <button type="button" class="menu-item" id="pctx-color" role="menuitem">Change Color</button>
@@ -1149,6 +1235,28 @@
       <div style="display:flex;gap:10px;">
         <button class="btn btn-outline" id="manual-lyrics-cancel" style="flex:1;justify-content:center;">Cancel</button>
         <button class="btn btn-primary" id="manual-lyrics-search" style="flex:1;justify-content:center;">Search</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="lyrics-editor-modal" class="modal-overlay">
+    <div class="modal-content lyrics-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="lyrics-editor-title">
+      <h3 id="lyrics-editor-title">Edit lyrics</h3>
+      <p id="lyrics-editor-track" class="lyrics-editor-track"></p>
+      <label for="lyrics-editor-type">Format</label>
+      <select id="lyrics-editor-type" class="meta-inp">
+        <option value="plain">Plain text</option>
+        <option value="synced">Timed LRC</option>
+      </select>
+      <label for="lyrics-editor-text">Lyrics</label>
+      <textarea id="lyrics-editor-text" class="meta-inp" rows="12" spellcheck="false" placeholder="Enter lyrics for this track"></textarea>
+      <p id="lyrics-editor-help" class="lyrics-editor-help">Plain lyrics appear without timed highlighting.</p>
+      <div id="lyrics-editor-preview" class="lyrics-editor-preview" aria-label="Lyrics preview"></div>
+      <p id="lyrics-editor-error" class="lyrics-editor-error" role="alert" hidden></p>
+      <div class="lyrics-editor-actions">
+        <button type="button" class="btn btn-outline" id="lyrics-editor-remove">Remove personal lyrics</button>
+        <button type="button" class="btn btn-outline" id="lyrics-editor-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="lyrics-editor-save">Save</button>
       </div>
     </div>
   </div>
@@ -1412,6 +1520,7 @@
   <script src="radio-local-bootstrap.js"></script>
   <script src="scan-root-filter.js"></script>
   <script src="local-track-matcher.js"></script>
+  <div id="version-picker-modal" class="modal-overlay"><div class="modal-content version-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="version-picker-title"><div class="version-picker-head"><h2 id="version-picker-title">Choose another version</h2><button type="button" class="icon-btn ghost" id="version-picker-close" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div><p id="version-picker-track"></p><div id="version-picker-results" role="status" aria-live="polite"></div></div></div>
   <script src="youtube-track-matcher.js"></script>
   <script src="playback-resolver.js"></script>
   <script src="playback-local-upgrade.js"></script>
@@ -1423,7 +1532,9 @@
   <script src="renderer-library-playback.js"></script>
   <script src="renderer-playback-downloads.js"></script>
   <script src="renderer-downloads-ui.js"></script>
+  <script src="renderer-import-review.js"></script>
   <script src="renderer-lyrics.js"></script>
+  <script src="renderer-audio-output.js"></script>
   <script src="renderer-settings-ui.js"></script>
   <script src="renderer-metadata-ui.js"></script>
   <script src="renderer-playback-ui.js"></script>

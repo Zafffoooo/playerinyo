@@ -6,6 +6,8 @@ const { DurableMatchCache, RuntimeLeaseCache } = require('./radio-stream-cache')
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const NEGATIVE_CACHE_TTL_MS = 10 * 60 * 1000;
 const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
+const STREAM_REUSE_MARGIN_MS = 30 * 1000;
+const MAX_STREAM_SOURCES = 16;
 function candidateKey(candidate) { return [candidate.trackMbid || '', candidate.artist || '', candidate.title || '', candidate.album || '', Math.round(Number(candidate.duration) || 0)].join('::').toLocaleLowerCase(); }
 function parseExpiry(url, now) { try { const value = new URL(url).searchParams.get('expire'); const seconds = Number(value); return Number.isFinite(seconds) && seconds * 1000 > now() ? seconds * 1000 : now() + 5 * 60 * 1000; } catch (_) { return now() + 5 * 60 * 1000; } }
 function validateMediaSource(format) {
@@ -31,8 +33,19 @@ function isRateLimitError(error) {
 }
 function flatSearchArgs(query) { return ['ytsearch10:' + query, '--flat-playlist', '--dump-single-json', '--no-playlist']; }
 function detailArgs(videoId) { return ['https://www.youtube.com/watch?v=' + videoId, '--dump-single-json', '--no-playlist']; }
+function fastStreamArgs(videoId) { return ['https://www.youtube.com/watch?v=' + videoId, '--skip-download', '--no-playlist', '-f', 'bestaudio[ext=m4a]/bestaudio', '--print', '{"url":%(url)j,"acodec":%(acodec)j,"vcodec":%(vcodec)j,"ext":%(ext)j}']; }
+function fastSourceFromInfo(info, now) {
+  const source = validateMediaSource(info);
+  if (!source) return null;
+  try {
+    const expiry = Number(new URL(source.url).searchParams.get('expire')) * 1000;
+    if (!Number.isFinite(expiry) || expiry <= now() + STREAM_REUSE_MARGIN_MS) return null;
+    source.expiresAt = expiry;
+    return source;
+  } catch (_) { return null; }
+}
 function createRadioStreamResolver(deps) {
-  deps = deps || {}; const now = deps.now || Date.now; const cache = deps.matchCache || new DurableMatchCache(); const leases = deps.leaseCache || new RuntimeLeaseCache({ now }); const negative = new Map(); const pending = new Set(); let cooldownUntil = 0; let rateLimitTrips = 0;
+  deps = deps || {}; const now = deps.now || Date.now; const cache = deps.matchCache || new DurableMatchCache(); const leases = deps.leaseCache || new RuntimeLeaseCache({ now }); const negative = new Map(); const pending = new Set(); const streamSources = new Map(); let cooldownUntil = 0; let rateLimitTrips = 0;
   if (typeof deps.runYtdlp !== 'function') throw new Error('runYtdlp is required');
   async function resolveCandidate(candidate, requestId, preferences) {
     const preferenceKey = JSON.stringify(preferences || {}); const startedAt = now(); const key = candidateKey(candidate) + '::prefs:' + preferenceKey; const hit = cache.get(key, MATCHER_VERSION);
@@ -88,14 +101,37 @@ function createRadioStreamResolver(deps) {
   }
   async function prepare(videoId, ownership, requestId) {
     if (!VIDEO_ID.test(videoId || '')) throw new Error('Invalid YouTube video ID');
-    let info;
-    try { info = await deps.runYtdlp(detailArgs(videoId), requestId); }
-    catch (error) { if (cache.invalidateVideoId) cache.invalidateVideoId(videoId); throw error; }
-    const source = chooseAudioFormat(info); if (!source) { if (cache.invalidateVideoId) cache.invalidateVideoId(videoId); throw new Error('No supported HTTPS audio format is available.'); }
-    source.expiresAt = parseExpiry(source.url, now); const lease = leases.create(videoId, source, ownership);
+    let source = streamSources.get(videoId);
+    if (source && source.expiresAt <= now() + STREAM_REUSE_MARGIN_MS) { streamSources.delete(videoId); source = null; }
+    if (!source) {
+      let info;
+      let fastMs = 0;
+      if (deps.enableFastStream) {
+        const started = now();
+        try { source = fastSourceFromInfo(await deps.runYtdlp(fastStreamArgs(videoId), requestId), now); }
+        catch (error) { if (/cancelled/i.test(String(error && error.message || error))) throw error; /* Detailed extraction remains the fallback. */ }
+        fastMs = now() - started;
+      }
+      const detailedStarted = now();
+      try { if (!source) info = await deps.runYtdlp(detailArgs(videoId), requestId); }
+      catch (error) { if (cache.invalidateVideoId) cache.invalidateVideoId(videoId); throw error; }
+      if (!source) source = chooseAudioFormat(info);
+      if (!source) { if (cache.invalidateVideoId) cache.invalidateVideoId(videoId); throw new Error('No supported HTTPS audio format is available.'); }
+      if (!source.expiresAt) source.expiresAt = parseExpiry(source.url, now);
+      if (typeof deps.onPrepareMetrics === 'function') deps.onPrepareMetrics({ videoId, mode: info ? 'detailed' : 'fast', fastMs, detailedMs: info ? now() - detailedStarted : 0 });
+      if (source.expiresAt > now() + STREAM_REUSE_MARGIN_MS) {
+        streamSources.delete(videoId);
+        streamSources.set(videoId, source);
+        while (streamSources.size > MAX_STREAM_SOURCES) streamSources.delete(streamSources.keys().next().value);
+      }
+    } else {
+      streamSources.delete(videoId);
+      streamSources.set(videoId, source);
+    }
+    const lease = leases.create(videoId, source, ownership);
     return { src: 'playerinyo-stream://lease/' + lease.leaseId, leaseId: lease.leaseId, expiresAt: lease.expiresAt };
   }
   function clearCooldown() { cooldownUntil = 0; negative.clear(); }
-  return { resolveCandidate, prepare, cancel: deps.cancel || (() => false), getLease: (id, ownership) => leases.get(id, ownership), release: (id) => leases.release(id), releaseByOwnership: (owner) => leases.releaseByOwnership(owner), clear: () => { clearCooldown(); leases.clear(); }, clearCooldown, getCooldown: () => Math.max(0, cooldownUntil - now()), matchCache: cache, leaseCache: leases };
+  return { resolveCandidate, prepare, cancel: deps.cancel || (() => false), getLease: (id, ownership) => leases.get(id, ownership), release: (id) => leases.release(id), releaseByOwnership: (owner) => leases.releaseByOwnership(owner), clear: () => { clearCooldown(); leases.clear(); streamSources.clear(); }, clearCooldown, getCooldown: () => Math.max(0, cooldownUntil - now()), matchCache: cache, leaseCache: leases };
 }
-module.exports = { VIDEO_ID, candidateKey, parseExpiry, validateMediaSource, chooseAudioFormat, parseSearchPayload, isRateLimitError, flatSearchArgs, detailArgs, createRadioStreamResolver };
+module.exports = { VIDEO_ID, candidateKey, parseExpiry, validateMediaSource, chooseAudioFormat, parseSearchPayload, isRateLimitError, flatSearchArgs, detailArgs, fastStreamArgs, fastSourceFromInfo, createRadioStreamResolver };

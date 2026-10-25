@@ -594,7 +594,15 @@ function toggleQueue() { setQueueOpen(!isQueueOpen); }
 function getTrackArtworkUrl(track) {
   if (!track) return '';
   if (track.matchedFile && typeof track.matchedFile.picture === 'string' && track.matchedFile.picture) return track.matchedFile.picture;
-  if (isRemotePlaybackTrack(track)) return 'https://i.ytimg.com/vi/' + track.playback.videoId + '/hqdefault.jpg';
+  if (isRemotePlaybackTrack(track)) {
+    if (typeof track.artwork === 'string' && track.artwork.length <= 4096) {
+      try {
+        var imageUrl = new URL(track.artwork);
+        if (imageUrl.protocol === 'https:' && !imageUrl.username && !imageUrl.password && ['lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'i.ytimg.com', 'i.scdn.co', 'mosaic.scdn.co'].includes(imageUrl.hostname)) return imageUrl.href;
+      } catch (_) { /* Fall back to the stable video thumbnail. */ }
+    }
+    return 'https://i.ytimg.com/vi/' + track.playback.videoId + '/hqdefault.jpg';
+  }
   return '';
 }
 function isLastfmRadioTrack(track) {
@@ -602,6 +610,7 @@ function isLastfmRadioTrack(track) {
 }
 function makeQueueActionMarkup(track, includeRemove, removeIndex) {
   var actions = '<button type="button" class="icon-btn ghost btn-add-queue-playlist" aria-label="Add to playlist" title="Add to playlist"><i class="ph ph-plus" aria-hidden="true"></i></button>';
+  if (isRemotePlaybackTrack(track)) actions += '<button type="button" class="icon-btn ghost btn-version-queue" aria-label="Choose another version of ' + esc(track.title || 'track') + '" title="Choose another version"><i class="ph ph-vinyl-record" aria-hidden="true"></i></button>';
   if (isLastfmRadioTrack(track)) actions += '<button type="button" class="icon-btn ghost btn-more-like-queue" aria-label="More Like This" title="More Like This"><i class="ph ph-sparkle" aria-hidden="true"></i></button>';
   if (track && (track.sourceRadio || isLastfmRadioTrack(track))) {
     actions += '<button type="button" class="icon-btn ghost btn-block-radio-track" aria-label="Never play ' + esc(track.title || 'track') + ' on Radio" title="Never play this track"><i class="ph ph-prohibit" aria-hidden="true"></i></button>';
@@ -730,6 +739,8 @@ function renderQueue(options) {
           if (isFullscreenQueueOpen()) renderFullscreenQueue();
         } else if (e.target.closest && e.target.closest('.btn-add-queue-playlist')) {
           e.stopPropagation(); showAddToPlaylistModal([track]);
+        } else if (e.target.closest && e.target.closest('.btn-version-queue')) {
+          e.stopPropagation(); openVersionPicker(track);
         } else if (!e.target.classList.contains('drag-handle')) {
           initAudioCtx();
           playTrack(track, { preserveRadioSession: isUserQueue, preserveQueueCursors: isUserQueue, selectedQueueTrack: true }).then(function (started) {

@@ -4,6 +4,64 @@ function metadataPathIsLocked(filePath) {
 }
 
 function isRemotePlaybackTrack(track) { return !!(track && track.playback && track.playback.kind === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(track.playback.videoId || '')); }
+function cancelLocalGaplessFrame() {
+  if (localGaplessFrame !== null) cancelAnimationFrame(localGaplessFrame);
+  localGaplessFrame = null;
+}
+function clearPreparedLocalSlot() {
+  if (!preparedLocalSlot) return;
+  var slot = preparedLocalSlot;
+  preparedLocalSlot = null;
+  var audio = audioEls && audioEls[slot.audioIndex];
+  if (audio) {
+    audio.removeEventListener('canplay', slot.onReady);
+    audio.removeEventListener('error', slot.onError);
+  }
+}
+function isPreparedLocalTrack(track, audioIndex) {
+  var slot = preparedLocalSlot;
+  var audio = audioEls && audioEls[audioIndex];
+  return !!(slot && slot.ready && slot.track === track && slot.audioIndex === audioIndex && audio && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA);
+}
+function prepareNextLocalTrack() {
+  if (!audioEls || !state.currentPlayingTrack || playbackTransitionPending || state.loopMode === 2 || Number(appSettings.crossfade || 0) > 0) { clearPreparedLocalSlot(); return; }
+  var selection = getNextTrackSelection();
+  var track = selection && selection.track;
+  if (!track || !track.matchedFile || !track.matchedFile.filePath || metadataPathIsLocked(track.matchedFile.filePath)) { clearPreparedLocalSlot(); return; }
+  var audioIndex = 1 - activeAudioIdx;
+  if (preparedLocalSlot && preparedLocalSlot.track === track && preparedLocalSlot.audioIndex === audioIndex) return;
+  clearPreparedLocalSlot();
+  clearPreparedRadioSlot(true);
+  var audio = audioEls[audioIndex];
+  if (!audio) return;
+  releaseRadioLeaseFromAudio(audio);
+  audio.pause();
+  audio.removeAttribute('crossorigin');
+  var slot = { track: track, audioIndex: audioIndex, ready: false };
+  slot.onReady = function () { if (preparedLocalSlot === slot) slot.ready = audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA; };
+  slot.onError = function () { if (preparedLocalSlot === slot) clearPreparedLocalSlot(); };
+  preparedLocalSlot = slot;
+  audio.addEventListener('canplay', slot.onReady);
+  audio.addEventListener('error', slot.onError);
+  audio.preload = 'auto';
+  audio.src = toFileUrl(track.matchedFile.filePath);
+  audio.load();
+  slot.onReady();
+}
+function checkLocalGaplessBoundary(audio) {
+  localGaplessFrame = null;
+  if (!audio || audio !== audioEls[activeAudioIdx] || audio.paused || !state.isPlaying || playbackTransitionPending || playbackSeekActive || state.loopMode === 2 || Number(appSettings.crossfade || 0) > 0) return;
+  var remaining = audio.duration - audio.currentTime;
+  if (!Number.isFinite(remaining) || remaining <= 0) return;
+  prepareNextLocalTrack();
+  var selection = getNextTrackSelection();
+  if (remaining <= 0.025 && selection && isPreparedLocalTrack(selection.track, 1 - activeAudioIdx)) {
+    state.crossfadingNext = true;
+    playNextTrack({ automaticAdvance: true, gaplessAdvance: true });
+    return;
+  }
+  if (remaining <= 0.75) localGaplessFrame = requestAnimationFrame(function () { checkLocalGaplessBoundary(audio); });
+}
 function releaseRadioLeaseFromAudio(audioEl) {
   if (!audioEl) return;
   var leaseId = audioEl._radioLeaseId;
@@ -48,9 +106,12 @@ async function prepareRemoteTrackInSlotOwned(track, audioIndex, generation, key)
   var requestId = nextRadioResolverRequestId(session);
   if (session) window.RadioResolverOwnership.registerRequest(session, requestId, 'transition');
   var audio = audioEls[audioIndex];
+  audio._radioPrepareRequestId = requestId;
+  var preparationStartedAt = performance.now();
   try {
     releaseRadioLeaseFromAudio(audio);
     var prepared = await playbackResolver.preparePlayback(track, { requestId: requestId, ownership: { stationId: track.radioSessionId || 'manual', queueEntryId: track.queueEntryId, generation: generation } });
+    var resolverMs = Math.round(performance.now() - preparationStartedAt);
     var current = remotePreparationInFlight && remotePreparationInFlight.get(audioIndex);
     if ((remotePreparationInFlight && (!current || current.key !== key)) || (generation !== playbackGeneration && state.currentPlayingTrack !== track)) {
       if (prepared.leaseId && window.api.releaseRadioPlayback) window.api.releaseRadioPlayback(prepared.leaseId).catch(function () { });
@@ -59,19 +120,27 @@ async function prepareRemoteTrackInSlotOwned(track, audioIndex, generation, key)
     audio._playbackGeneration = generation;
     audio._radioLeaseId = prepared.leaseId || '';
     audio._radioLeaseExpiresAt = Number(prepared.expiresAt) || 0;
+    audio.crossOrigin = 'anonymous';
     audio.src = prepared.src;
     audio.preload = 'auto';
     audio.load();
     var ready = await waitForRadioAudioReady(audio, generation);
+    console.info('YouTube audio ready', { videoId: track.playback.videoId, resolverMs: resolverMs, audioReadyMs: Math.round(performance.now() - preparationStartedAt - resolverMs), ready: !!ready });
     current = remotePreparationInFlight && remotePreparationInFlight.get(audioIndex);
-    if (!ready || (remotePreparationInFlight && (!current || current.key !== key))) { releaseRadioLeaseFromAudio(audio); return false; }
+    if (!ready || (remotePreparationInFlight && (!current || current.key !== key))) {
+      if (!ready) track._playbackError = 'Audio stream did not become ready. Try another version.';
+      if (audio._radioPrepareRequestId === requestId && audio._radioLeaseId === prepared.leaseId) releaseRadioLeaseFromAudio(audio);
+      return false;
+    }
     preparedRadioSlot = { audioIndex: audioIndex, queueEntryId: track.queueEntryId, stationId: track.radioSessionId || '', generation: generation, ready: true };
     return true;
   } catch (error) {
     console.warn('Could not prepare radio stream:', error && error.message ? error.message : error);
-    releaseRadioLeaseFromAudio(audio);
+    track._playbackError = error && error.message ? error.message : 'Could not prepare this audio stream.';
+    if (audio._radioPrepareRequestId === requestId) releaseRadioLeaseFromAudio(audio);
     return false;
   } finally {
+    if (audio._radioPrepareRequestId === requestId) audio._radioPrepareRequestId = '';
     if (session) window.RadioResolverOwnership.unregisterRequest(session, requestId, 'transition');
   }
 }
@@ -93,6 +162,7 @@ async function playTrack(track, options) {
   var radioSessionToClose = state.radioSession && track.radioSessionId !== state.radioSession.stationId && !options.preserveRadioSession ? state.radioSession : null;
   if (track.matchedFile && metadataPathIsLocked(track.matchedFile.filePath)) { showToast('Wait for metadata writing to finish for this track.'); return false; }
   var generation = ++playbackGeneration;
+  var playStartedAt = performance.now();
   playbackTransitionPending = true;
   pendingPlaybackTrack = track;
   // A manual Next/Previous invalidates only an obsolete stream preparation.
@@ -105,6 +175,7 @@ async function playTrack(track, options) {
 
   if (!audioEls) audioEls = [$('audio-player-0'), $('audio-player-1')];
   invalidateRestoredPlaybackPreparation();
+  cancelLocalGaplessFrame();
   cancelCrossfadeTransition(true);
   var previousIndex = activeAudioIdx;
   var nextIndex = 1 - previousIndex;
@@ -114,29 +185,36 @@ async function playTrack(track, options) {
   var nextGain = audioGainNodes ? audioGainNodes[nextIndex] : null;
   var targetGain = getNormalizationGain(track);
   var cfDuration = Math.max(0, parseInt(appSettings.crossfade || 0, 10) || 0);
-  var shouldCrossfade = cfDuration > 0 && prevAudio && !prevAudio.paused && audioCtx && nextGain && prevGain;
+  var reusePreparedLocal = !isRemotePlaybackTrack(track) && isPreparedLocalTrack(track, nextIndex);
+  var transitionDuration = options.gaplessAdvance && reusePreparedLocal ? 0.012 : cfDuration;
+  var shouldCrossfade = transitionDuration > 0 && prevAudio && !prevAudio.paused && audioCtx && nextGain && prevGain;
+  clearPreparedLocalSlot();
 
   nextAudio._playbackGeneration = generation;
   if (!nextAudio.paused) nextAudio.pause();
   var reusePrepared = isRemotePlaybackTrack(track) && isPreparedRadioTrack(track, nextIndex);
   if (isRemotePlaybackTrack(track) && !reusePrepared) {
-    var feedbackToken = setPlaybackFeedback(options.selectedQueueTrack ? 'Preparing selected track…' : 'Switching track…', false);
+    var feedbackToken = setPlaybackFeedback('Preparing ' + (track.title || 'song') + '…', false);
     radioUiState.preparation = 'Preparing track…'; if (state.currentView === 'radio') renderRadioView();
     if (!await prepareRemoteTrackInSlot(track, nextIndex, generation)) {
-      if (feedbackToken === playbackFeedbackToken) setPlaybackFeedback('', false);
+      if (generation !== playbackGeneration || pendingPlaybackTrack !== track) return false;
+      if (feedbackToken === playbackFeedbackToken) setPlaybackFeedback(track._playbackError || 'Could not load this song. Try another version.', 8000);
       radioUiState.preparation = ''; playbackTransitionPending = false; pendingPlaybackTrack = null; return false;
     }
     if (feedbackToken === playbackFeedbackToken) setPlaybackFeedback('', false);
     radioUiState.preparation = '';
-  } else if (!isRemotePlaybackTrack(track)) {
+  } else if (!isRemotePlaybackTrack(track) && !reusePreparedLocal) {
     releaseRadioLeaseFromAudio(nextAudio);
+    nextAudio.removeAttribute('crossorigin');
     nextAudio.src = toFileUrl(track.matchedFile.filePath);
     nextAudio.load();
   }
   if (nextGain) setPlaybackGain(nextGain, shouldCrossfade ? 0 : targetGain, 0);
 
   try {
+    await ensureAudioOutputReady();
     await nextAudio.play();
+    if (isRemotePlaybackTrack(track)) console.info('YouTube first playback', { videoId: track.playback.videoId, ms: Math.round(performance.now() - playStartedAt) });
   } catch (e) {
     if (generation !== playbackGeneration || nextAudio._playbackGeneration !== generation) return false;
     console.error(e);
@@ -148,6 +226,10 @@ async function playTrack(track, options) {
     if (prevGain) setPlaybackGain(prevGain, getNormalizationGain(state.currentPlayingTrack), 0.06);
     syncPlaybackStateUi();
     showToast('Could not play ' + (track.title || 'the selected track') + '.');
+    if (isRemotePlaybackTrack(track)) {
+      track._playbackError = 'Audio stream could not start. Try another version.';
+      setPlaybackFeedback(track._playbackError, 8000);
+    }
     return false;
   }
 
@@ -182,6 +264,8 @@ async function playTrack(track, options) {
   clearInterval(_npSlideshowTimer);
   _npSlideshowTimer = null;
   state.npSlideImages = [];
+  var freshArt = document.getElementById('np-art');
+  if (freshArt) freshArt.style.opacity = '1';
   state._lastStatsTime = null;
   state.playHistory.push(track);
   if (state.playHistory.length > 50) state.playHistory.shift();
@@ -200,14 +284,14 @@ async function playTrack(track, options) {
 
   if (shouldCrossfade) {
     crossfadeActive = true;
-    setPlaybackGain(nextGain, targetGain, cfDuration);
-    setPlaybackGain(prevGain, 0, cfDuration);
+    setPlaybackGain(nextGain, targetGain, transitionDuration);
+    setPlaybackGain(prevGain, 0, transitionDuration);
     crossfadeStopTimer = setTimeout(function () {
       if (generation !== playbackGeneration) return;
       if (prevAudio && prevAudio !== audioEls[activeAudioIdx]) { prevAudio.pause(); releaseRadioLeaseFromAudio(prevAudio); }
       crossfadeStopTimer = null;
       crossfadeActive = false;
-    }, cfDuration * 1000);
+    }, transitionDuration * 1000);
   } else {
     if (prevAudio && prevAudio !== nextAudio) { prevAudio.pause(); releaseRadioLeaseFromAudio(prevAudio); }
     if (prevGain) setPlaybackGain(prevGain, 0, 0);
@@ -225,14 +309,11 @@ async function playTrack(track, options) {
   recordPlayStat(track);
   maybeRefillRadioQueue();
   prepareNextRadioTrack();
+  prepareNextLocalTrack();
   syncPlaybackStateUi();
   if (isQueueOpen) renderQueue();
   if (lyricsOpen) fetchLyricsForTrack(track);
   if (npOverlayOpen) { updateNowPlayingOverlay(); fetchLyricsForTrack(track).then(function () { if (generation === playbackGeneration) mirrorLyricsToNP(); }); }
-  // Discord Rich Presence
-  if (appSettings.discordRpc && window.api.discordUpdate) {
-    window.api.discordUpdate(track.title, track.artist, track.album, Date.now());
-  }
   // Album cover slideshow: scan folder for extra images
   if (npOverlayOpen && track.matchedFile && track.matchedFile.filePath) {
     var trackFolder = track.matchedFile.filePath.replace(/[^\\/\\\\]+$/, '');
@@ -304,6 +385,7 @@ async function togglePlay() {
   }
   if (!audio.src || audio.src.endsWith(window.location.pathname) || audio.src === '') {
     if (state.currentPlayingTrack.matchedFile && state.currentPlayingTrack.matchedFile.filePath) {
+      audio.removeAttribute('crossorigin');
       audio.src = toFileUrl(state.currentPlayingTrack.matchedFile.filePath);
     }
   }
@@ -320,6 +402,7 @@ async function togglePlay() {
     var activeGain = audioGainNodes ? audioGainNodes[activeAudioIdx] : null;
     if (activeGain) setPlaybackGain(activeGain, getNormalizationGain(state.currentPlayingTrack), 0.04);
     try {
+      await ensureAudioOutputReady();
       await audio.play();
       if (generation !== playbackGeneration) return;
       playbackTransitionPending = false;
@@ -558,7 +641,8 @@ async function playNextTrack(options) {
     var playPromise = playTrack(selection.track, {
       preserveRadioSession: !!selection.userQueue,
       preserveQueueCursors: !!selection.userQueue,
-      automaticAdvance: !!options.automaticAdvance
+      automaticAdvance: !!options.automaticAdvance,
+      gaplessAdvance: !!options.gaplessAdvance
     });
     var attemptGeneration = playbackGeneration;
     var started = await playPromise;
@@ -602,6 +686,8 @@ async function playNextTrack(options) {
 function stopPlaybackState(options) {
   options = options || {};
   playbackGeneration++;
+  cancelLocalGaplessFrame();
+  clearPreparedLocalSlot();
   playbackTransitionPending = false;
   pendingPlaybackTrack = null;
   crossfadeSuppressedTrack = null;
@@ -623,6 +709,8 @@ function resetPlaybackRuntime(options) {
   options = options || {};
   if (state.radioSession) disposeRadioSession();
   playbackGeneration++;
+  cancelLocalGaplessFrame();
+  clearPreparedLocalSlot();
   playbackTransitionPending = false;
   pendingPlaybackTrack = null;
   crossfadeSuppressedTrack = null;
@@ -929,6 +1017,8 @@ function openPlaylistContextMenu(pl, x, y, opener) {
   });
   var pinBtn = $('pctx-pin'); if (pinBtn) pinBtn.textContent = pl.pinned ? 'Unpin Playlist' : 'Pin Playlist';
   var downloadBtn = $('pctx-download-missing');
+  var reimportBtn = $('pctx-reimport');
+  if (reimportBtn) reimportBtn.hidden = !pl || !pl.importSource || !pl.importSource.path || exportOnly;
   if (downloadBtn) {
     var missingCount = pl && !pl.isSpecial ? getDownloadableMissingPlaylistRows(pl).length : 0;
     downloadBtn.hidden = !missingCount;
@@ -1193,7 +1283,7 @@ function isLocalPlaylistImportCandidate(row) {
   return !!(isM3uImportRecord(row) && row.SourceStatus === 'local-existing' && !findExactPlaylistPathMatch(row));
 }
 function isPlaylistImportDownloadEligible(row) {
-  return !!(row && !isM3uImportRecord(row) && isPlaylistRecordMissing(row));
+  return !!(row && row.__importDiff !== 'removed' && row.SourceFormat !== 'url' && !isM3uImportRecord(row) && isPlaylistRecordMissing(row));
 }
 function buildPlaylistImportGroups(sourcePath, data, sourceName) {
   if (!Array.isArray(data) || !data.length) return [];
@@ -1206,7 +1296,7 @@ function buildPlaylistImportGroups(sourcePath, data, sourceName) {
     });
     return Object.keys(grouped).map(function (name) { return { name: name, tracks: grouped[name] }; });
   }
-  var name = sourceName || String(sourcePath || '').split(/[\\\/]/).pop().replace(/\.(?:csv|m3u8?)$/i, '') || 'Imported Playlist';
+  var name = sourceName || String(sourcePath || '').split(/[\\\/]/).pop().replace(/\.(?:csv|m3u8?|json|zip)$/i, '') || 'Imported Playlist';
   return [{ name: name, tracks: data }];
 }
 function getPlaylistImportRows() {
@@ -1382,7 +1472,7 @@ function setImportRowCandidate(row, candidate, manual) {
 function clearImportRowTransient(row) {
   cancelCandidateSearchRequest(row);
   row.__candidateRequestSeq = (row.__candidateRequestSeq || 0) + 1;
-  ['__downloadSelected', '__addLocalSelected', '__downloadStatus', '__downloadError', '__downloadCandidate', '__downloadCandidates', '__downloadCandidateManual', '__candidateLoading', '__candidateQueued', '__candidatePromise', '__candidateError', '__candidateNotice', '__candidateQueryCount'].forEach(function (key) { delete row[key]; });
+  ['__downloadSelected', '__addLocalSelected', '__downloadStatus', '__downloadError', '__downloadCandidate', '__downloadCandidates', '__downloadCandidateManual', '__candidateLoading', '__candidateQueued', '__candidatePromise', '__candidateError', '__candidateNotice', '__candidateQueryCount', '__importDiff'].forEach(function (key) { delete row[key]; });
 }
 function snapshotImportRowTransient(row) {
   var data = {};

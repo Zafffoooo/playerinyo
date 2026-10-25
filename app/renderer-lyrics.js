@@ -1,4 +1,5 @@
 /* ─── LYRICS ENGINE ─── */
+var lyricsFetchGeneration = 0;
 
 function parseLrc(lrcText) {
   var lines = String(lrcText || '').replace(/^\uFEFF/, '').split(/\r?\n/);
@@ -126,6 +127,7 @@ function cacheLyrics(key, data) {
 function renderPlainLyrics(text) {
   lyricsData = [];
   plainLyricsText = text;
+  lyricsRawText = text;
   var lc = $('lyrics-content');
   if (lc) {
     lc.innerHTML = '';
@@ -151,6 +153,7 @@ function applyTrustedLyricsResult(track, data) {
   if (data && data.syncedLyrics) {
     lyricsData = parseLrc(data.syncedLyrics);
     plainLyricsText = '';
+    lyricsRawText = data.syncedLyrics;
     renderLyricsPanel();
     if (npOverlayOpen) mirrorLyricsToNP();
     return true;
@@ -163,12 +166,8 @@ function applyTrustedLyricsResult(track, data) {
   return false;
 }
 
-function saveCustomLyricsForTrack(track, synced, plain) {
-  var trackKey = track && track._lyricsSaveKey || ((track && track.matchedFile && track.matchedFile.filePath) ? 'path:' + track.matchedFile.filePath : getLyricsRequestKey(track));
-  if (!trackKey) return;
-  if (!appSettings.customLyrics || typeof appSettings.customLyrics !== 'object') appSettings.customLyrics = {};
-  appSettings.customLyrics[trackKey] = JSON.stringify({ syncedLyrics: synced || '', plainLyrics: plain || '' });
-  saveSettingsDebounced();
+function getPersonalLyricsKey(track) {
+  return track && track._lyricsSaveKey || ((track && track.matchedFile && track.matchedFile.filePath) ? 'path:' + track.matchedFile.filePath : getLyricsRequestKey(track));
 }
 
 async function fetchLyricsForTrack(track) {
@@ -176,23 +175,25 @@ async function fetchLyricsForTrack(track) {
   loadLyricsOffsetForTrack(track);
   var key = getLyricsRequestKey(track);
   if (key === lyricsCurrentTrackKey) return;
+  var generation = ++lyricsFetchGeneration;
 
   // Reset state and clear UI immediately
   lyricsCurrentTrackKey = key;
   lyricsData = [];
   plainLyricsText = '';
+  lyricsRawText = '';
   lyricsActiveIdx = -2;
   npLyricsActiveIdx = -2;
   var lc = $('lyrics-content');
   if (lc) lc.innerHTML = '<div class="lyrics-empty"><i class="ph ph-spinner ph-spin" style="font-size:36px;color:var(--text-subdued);"></i><p style="color:var(--text-subdued);font-size:12px;margin-top:12px;">Searching lyrics...</p></div>';
   if (npOverlayOpen) mirrorLyricsToNP(); // Clear NP overlay lyrics
 
-  var personalKey = track.matchedFile && track.matchedFile.filePath ? 'path:' + track.matchedFile.filePath : key;
+  var personalKey = getPersonalLyricsKey(track);
   var personalLyrics = appSettings.customLyrics && appSettings.customLyrics[personalKey];
   if (personalLyrics) {
     try {
       var personalData = JSON.parse(personalLyrics);
-      if (personalData.syncedLyrics) { lyricsData = parseLrc(personalData.syncedLyrics); plainLyricsText = ''; renderLyricsPanel(); }
+      if (personalData.syncedLyrics) { lyricsData = parseLrc(personalData.syncedLyrics); plainLyricsText = ''; lyricsRawText = personalData.syncedLyrics; renderLyricsPanel(); }
       else if (personalData.plainLyrics) renderPlainLyrics(personalData.plainLyrics);
       if (lyricsData.length || plainLyricsText) { if (npOverlayOpen) mirrorLyricsToNP(); return; }
     } catch (_) { /* Ignore malformed personal cache entries and try online sources. */ }
@@ -214,11 +215,11 @@ async function fetchLyricsForTrack(track) {
     var apiUrl = 'https://lrclib.net/api/get?artist_name=' + encodeURIComponent(track.artist) + '&track_name=' + encodeURIComponent(track.title) + '&album_name=' + encodeURIComponent(track.album || '') + (duration ? '&duration=' + duration : '');
     var resp = await fetch(apiUrl);
     // Track may have changed while awaiting; never let a stale fetch overwrite newer lyrics
-    if (lyricsCurrentTrackKey !== key) return;
+    if (lyricsCurrentTrackKey !== key || lyricsFetchGeneration !== generation) return;
 
     if (resp.ok) {
       var data = await resp.json();
-      if (lyricsCurrentTrackKey !== key) return;
+      if (lyricsCurrentTrackKey !== key || lyricsFetchGeneration !== generation) return;
       if (applyTrustedLyricsResult(track, data)) {
         cacheLyrics(key, data);
         exactMatched = true;
@@ -230,10 +231,10 @@ async function fetchLyricsForTrack(track) {
     if (!exactMatched) {
       var searchUrl = 'https://lrclib.net/api/search?artist_name=' + encodeURIComponent(track.artist) + '&track_name=' + encodeURIComponent(track.title);
       var searchResponse = await fetch(searchUrl);
-      if (lyricsCurrentTrackKey !== key) return;
+      if (lyricsCurrentTrackKey !== key || lyricsFetchGeneration !== generation) return;
       if (searchResponse.ok) {
         var candidates = await searchResponse.json();
-        if (lyricsCurrentTrackKey !== key) return;
+        if (lyricsCurrentTrackKey !== key || lyricsFetchGeneration !== generation) return;
         var matching = (Array.isArray(candidates) ? candidates : []).find(function (candidate) { return isTrustedLyricsMatch(track, candidate); });
         if (matching && applyTrustedLyricsResult(track, matching)) { cacheLyrics(key, matching); return; }
       } else if (searchResponse.status >= 500) requestFailed = true;
@@ -241,15 +242,16 @@ async function fetchLyricsForTrack(track) {
   } catch (e) { requestFailed = true; console.log('LRCLIB fetch error:', e); }
 
   // lyrics.ovh provides plain text only and is used as a fallback.
+  if (lyricsFetchGeneration !== generation) return;
   try {
     var fallbackResponse = await fetch('https://api.lyrics.ovh/v1/' + encodeURIComponent(track.artist) + '/' + encodeURIComponent(track.title));
-    if (lyricsCurrentTrackKey !== key) return;
+    if (lyricsCurrentTrackKey !== key || lyricsFetchGeneration !== generation) return;
     if (fallbackResponse.ok) {
       var fallbackData = await fallbackResponse.json();
-      if (lyricsCurrentTrackKey !== key) return;
+      if (lyricsCurrentTrackKey !== key || lyricsFetchGeneration !== generation) return;
       if (fallbackData && fallbackData.lyrics) {
         renderPlainLyrics(fallbackData.lyrics);
-        saveCustomLyricsForTrack(track, '', fallbackData.lyrics);
+        cacheLyrics(key, { artistName: track.artist, trackName: track.title, plainLyrics: fallbackData.lyrics });
         if (npOverlayOpen) mirrorLyricsToNP();
         return;
       }
@@ -257,9 +259,10 @@ async function fetchLyricsForTrack(track) {
   } catch (_) { requestFailed = true; }
 
   // Final fallback: No lyrics found
-  if (lyricsCurrentTrackKey === key) {
+  if (lyricsCurrentTrackKey === key && lyricsFetchGeneration === generation) {
     lyricsData = [];
     plainLyricsText = '';
+    lyricsRawText = '';
     if (lc) lc.innerHTML = '<div class="lyrics-empty"><i class="ph ' + (requestFailed ? 'ph-wifi-slash' : 'ph-microphone-stage') + '" style="font-size:48px;color:var(--text-disabled);margin-bottom:12px;"></i><p style="color:var(--text-subdued);font-size:13px;">' + (requestFailed ? 'Could not connect to lyrics services' : 'Lyrics not found') + '</p><p style="color:var(--text-disabled);font-size:11px;margin-top:4px;">Use retry, paste your own lyrics, or search the web.</p></div>';
     if (npOverlayOpen) mirrorLyricsToNP();
   }
@@ -322,8 +325,125 @@ var btnCloseLyrics = null;
 
 var btnLyricsFile = null;
 
+var lyricsEditorTrack = null;
+var lyricsEditorKey = '';
+var lyricsEditorInitial = '';
+
+function updateLyricsEditorPreview() {
+  var text = $('lyrics-editor-text').value;
+  var timed = $('lyrics-editor-type').value === 'synced';
+  var preview = $('lyrics-editor-preview');
+  var help = $('lyrics-editor-help');
+  var error = $('lyrics-editor-error');
+  var lines = timed ? parseLrc(text) : [];
+  preview.replaceChildren();
+  if (error) error.hidden = true;
+  if (help) help.textContent = timed ? 'Use [mm:ss.xx] before each timed line.' : 'Plain lyrics appear without timed highlighting.';
+  if (!text.trim()) { preview.textContent = 'Preview appears here.'; return; }
+  if (timed && !lines.length) { preview.textContent = 'Add at least one timed line to preview LRC lyrics.'; return; }
+  (timed ? lines.slice(0, 80).map(function (line) { return line.text; }) : text.split('\n').slice(0, 80)).forEach(function (line) {
+    var row = document.createElement('div');
+    row.textContent = line || '\u00a0';
+    preview.appendChild(row);
+  });
+}
+
+function openLyricsEditor(track, initialText, initialType) {
+  if (!track) { showToast('Play a track before editing lyrics.'); return; }
+  lyricsEditorTrack = track;
+  lyricsEditorKey = getPersonalLyricsKey(track);
+  var personal = appSettings.customLyrics && appSettings.customLyrics[lyricsEditorKey];
+  var text = initialText === undefined ? (lyricsCurrentTrackKey === getLyricsRequestKey(track) ? lyricsRawText : '') : initialText;
+  var type = initialType || (lyricsData.length ? 'synced' : 'plain');
+  if (initialText === undefined && personal) {
+    try {
+      var data = JSON.parse(personal);
+      if (data.syncedLyrics) { text = data.syncedLyrics; type = 'synced'; }
+      else if (data.plainLyrics) { text = data.plainLyrics; type = 'plain'; }
+    } catch (_) { /* Malformed saved lyrics can be replaced in the editor. */ }
+  }
+  $('lyrics-editor-track').textContent = (track.artist || 'Unknown Artist') + ' — ' + (track.title || 'Unknown Track');
+  $('lyrics-editor-text').value = text || '';
+  $('lyrics-editor-type').value = type;
+  $('lyrics-editor-remove').hidden = !personal;
+  lyricsEditorInitial = JSON.stringify([$('lyrics-editor-text').value, type]);
+  updateLyricsEditorPreview();
+  showModal($('lyrics-editor-modal'), { initialFocus: '#lyrics-editor-text' });
+}
+
+async function closeLyricsEditor() {
+  if (JSON.stringify([$('lyrics-editor-text').value, $('lyrics-editor-type').value]) !== lyricsEditorInitial) {
+    if (!await requestConfirmation('Discard unsaved lyrics changes?')) return;
+  }
+  hideModal($('lyrics-editor-modal'));
+  lyricsEditorTrack = null;
+}
+
+async function saveLyricsEditor() {
+  if (!lyricsEditorTrack || !lyricsEditorKey) return;
+  var text = $('lyrics-editor-text').value.trim();
+  var type = $('lyrics-editor-type').value;
+  var error = $('lyrics-editor-error');
+  if (!text) { error.textContent = 'Enter lyrics before saving.'; error.hidden = false; return; }
+  if (type === 'synced' && !parseLrc(text).length) { error.textContent = 'Timed LRC needs at least one [mm:ss.xx] line.'; error.hidden = false; return; }
+  var value = JSON.stringify({ syncedLyrics: type === 'synced' ? text : '', plainLyrics: type === 'plain' ? text : '' });
+  if (value.length > 100000) { error.textContent = 'Lyrics are too long to save (100,000 characters maximum).'; error.hidden = false; return; }
+  var previous = appSettings.customLyrics;
+  appSettings.customLyrics = Object.assign({}, previous || {});
+  appSettings.customLyrics[lyricsEditorKey] = value;
+  var saveButton = $('lyrics-editor-save');
+  saveButton.disabled = true;
+  try {
+    await persistSettings(appSettings);
+    if (state.currentPlayingTrack && getPersonalLyricsKey(state.currentPlayingTrack) === lyricsEditorKey) {
+      lyricsFetchGeneration++;
+      lyricsCurrentTrackKey = getLyricsRequestKey(state.currentPlayingTrack);
+      lyricsRawText = text;
+      if (type === 'synced') { lyricsData = parseLrc(text); plainLyricsText = ''; renderLyricsPanel(); }
+      else renderPlainLyrics(text);
+      if (npOverlayOpen) mirrorLyricsToNP();
+    }
+    hideModal($('lyrics-editor-modal'));
+    lyricsEditorTrack = null;
+    showToast('Personal lyrics saved.');
+  } catch (_) {
+    appSettings.customLyrics = previous;
+    error.textContent = 'Could not save lyrics. Try again.';
+    error.hidden = false;
+  } finally { saveButton.disabled = false; }
+}
+
+async function removePersonalLyrics() {
+  if (!lyricsEditorKey || !appSettings.customLyrics || !appSettings.customLyrics[lyricsEditorKey]) return;
+  var previous = appSettings.customLyrics;
+  appSettings.customLyrics = Object.assign({}, previous);
+  delete appSettings.customLyrics[lyricsEditorKey];
+  var removeButton = $('lyrics-editor-remove');
+  removeButton.disabled = true;
+  try {
+    await persistSettings(appSettings);
+    var sameTrack = state.currentPlayingTrack && getPersonalLyricsKey(state.currentPlayingTrack) === lyricsEditorKey;
+    hideModal($('lyrics-editor-modal'));
+    lyricsEditorTrack = null;
+    if (sameTrack) { lyricsFetchGeneration++; lyricsCurrentTrackKey = ''; await fetchLyricsForTrack(state.currentPlayingTrack); }
+    showToast('Personal lyrics removed.');
+  } catch (_) {
+    appSettings.customLyrics = previous;
+    var error = $('lyrics-editor-error');
+    error.textContent = 'Could not remove personal lyrics. Try again.';
+    error.hidden = false;
+  } finally { removeButton.disabled = false; }
+}
+
 
 function initLyricsControls() {
+  $('lyrics-editor-text').addEventListener('input', updateLyricsEditorPreview);
+  $('lyrics-editor-type').addEventListener('change', updateLyricsEditorPreview);
+  $('lyrics-editor-save').addEventListener('click', saveLyricsEditor);
+  $('lyrics-editor-remove').addEventListener('click', removePersonalLyrics);
+  $('lyrics-editor-cancel').addEventListener('click', closeLyricsEditor);
+  $('lyrics-editor-modal').addEventListener('click', function (event) { if (event.target === $('lyrics-editor-modal')) closeLyricsEditor(); });
+  $('np-lyrics-edit').addEventListener('click', function () { openLyricsEditor(state.currentPlayingTrack); });
   lcElement = $('lyrics-content');
   if (lcElement) lcElement.addEventListener('contextmenu', openManualLyricsSearch);
   manualLyricsCancel = $('manual-lyrics-cancel');
@@ -346,29 +466,13 @@ function initLyricsControls() {
   if (btnCloseLyrics) btnCloseLyrics.addEventListener('click', function () { setLyricsOpen(false); });
   btnLyricsFile = $('btn-lyrics-load-file');
   if (btnLyricsFile) btnLyricsFile.addEventListener('click', async function () {
-    var content = await window.api.openLrc();
-    if (!content) return;
     var track = state.currentPlayingTrack;
     if (!track) { showToast('Play a track before loading its lyrics.'); return; }
-    lyricsData = parseLrc(content);
-    plainLyricsText = '';
-    lyricsCurrentTrackKey = getLyricsRequestKey(track);
-    saveCustomLyricsForTrack(track, content, '');
-    renderLyricsPanel();
-    if (npOverlayOpen) mirrorLyricsToNP();
+    var content = await window.api.openLrc();
+    if (content) openLyricsEditor(track, content, 'synced');
   });
   var pasteLyricsButton = $('btn-lyrics-paste');
-  if (pasteLyricsButton) pasteLyricsButton.addEventListener('click', function () {
-    var track = state.currentPlayingTrack;
-    if (!track) { showToast('Play a track before adding lyrics.'); return; }
-    var pasted = window.prompt('Paste plain text or timed LRC lyrics for the current track:');
-    if (pasted === null || !pasted.trim()) return;
-    lyricsCurrentTrackKey = getLyricsRequestKey(track);
-    var parsed = parseLrc(pasted);
-    if (parsed.length) { lyricsData = parsed; plainLyricsText = ''; saveCustomLyricsForTrack(track, pasted, ''); renderLyricsPanel(); }
-    else { renderPlainLyrics(pasted); saveCustomLyricsForTrack(track, '', pasted); }
-    if (npOverlayOpen) mirrorLyricsToNP();
-  });
+  if (pasteLyricsButton) pasteLyricsButton.addEventListener('click', function () { openLyricsEditor(state.currentPlayingTrack); });
   var retryLyricsButton = $('btn-lyrics-retry');
   if (retryLyricsButton) retryLyricsButton.addEventListener('click', function () { lyricsCurrentTrackKey = ''; if (state.currentPlayingTrack) fetchLyricsForTrack(state.currentPlayingTrack); });
   var webLyricsButton = $('btn-lyrics-web-search');

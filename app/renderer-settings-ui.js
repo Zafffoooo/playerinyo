@@ -113,7 +113,6 @@ var cbVirtualScrolling = null;
 var togglePlBtn = null;
 
 
-var btnFullscreenPl = null;
 
 
 
@@ -619,22 +618,26 @@ var npOverlayOpen = false;
 var npSecondaryPanel = 'lyrics';
 function isFullscreenQueueOpen() { return npOverlayOpen && npSecondaryPanel === 'queue'; }
 function setNPSecondaryPanel(panel) {
-  npSecondaryPanel = panel === 'queue' ? 'queue' : 'lyrics';
+  npSecondaryPanel = panel === 'queue' || panel === 'lyrics' ? panel : 'none';
   var queue = $('np-queue-content'); var lyrics = $('np-lyrics-content'); var lyricsHeader = document.querySelector('.np-lyrics-header');
+  var region = $('np-lyrics-col');
+  var overlay = $('now-playing-overlay');
+  if (overlay) overlay.classList.toggle('np-lyrics-hidden', npSecondaryPanel === 'none');
+  if (region) { region.setAttribute('aria-hidden', npSecondaryPanel === 'none' ? 'true' : 'false'); region.inert = npSecondaryPanel === 'none'; }
   if (queue) queue.hidden = npSecondaryPanel !== 'queue';
   if (lyrics) lyrics.hidden = npSecondaryPanel !== 'lyrics';
   if (lyricsHeader) lyricsHeader.hidden = npSecondaryPanel !== 'lyrics';
-  [['np-queue-tab', 'queue'], ['np-lyrics-tab', 'lyrics']].forEach(function (entry) { var tab = $(entry[0]); if (tab) { var active = npSecondaryPanel === entry[1]; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active ? 'true' : 'false'); } });
-  var queueToggle = $('np-queue-toggle'); if (queueToggle) { var activeQueue = npSecondaryPanel === 'queue'; queueToggle.setAttribute('aria-label', activeQueue ? 'Show lyrics' : 'Show queue'); queueToggle.setAttribute('aria-expanded', activeQueue ? 'true' : 'false'); queueToggle.style.color = activeQueue ? 'var(--accent)' : 'rgba(255,255,255,0.6)'; }
+  var queueToggle = $('np-queue-toggle'); if (queueToggle) { var activeQueue = npSecondaryPanel === 'queue'; queueToggle.setAttribute('aria-label', activeQueue ? 'Hide queue' : 'Show queue'); queueToggle.setAttribute('aria-expanded', activeQueue ? 'true' : 'false'); queueToggle.style.color = activeQueue ? 'var(--accent)' : 'rgba(255,255,255,0.6)'; }
+  applyNPLyricsVisibility();
   if (npSecondaryPanel === 'queue') renderFullscreenQueue();
 }
 function applyNPLyricsVisibility() {
   var btn = document.getElementById('np-lyrics-toggle');
   var region = document.getElementById('np-lyrics-col');
-  if (region) { region.setAttribute('aria-hidden', 'false'); region.inert = false; }
+  if (region) { region.setAttribute('aria-hidden', npSecondaryPanel === 'none' ? 'true' : 'false'); region.inert = npSecondaryPanel === 'none'; }
   if (btn) {
     var activeLyrics = npSecondaryPanel === 'lyrics';
-    btn.setAttribute('aria-label', activeLyrics ? 'Show queue' : 'Show lyrics');
+    btn.setAttribute('aria-label', activeLyrics ? 'Hide lyrics' : 'Show lyrics');
     btn.setAttribute('aria-expanded', activeLyrics ? 'true' : 'false');
     btn.style.color = activeLyrics ? 'var(--accent)' : 'rgba(255,255,255,0.6)';
   }
@@ -670,6 +673,31 @@ function closeNowPlayingOverlay() {
 function toggleNowPlayingOverlay() {
   if (npOverlayOpen) closeNowPlayingOverlay(); else openNowPlayingOverlay();
 }
+var npGradientSource = '';
+function updateNPArtworkGradient(pic, artEl) {
+  var overlay = $('now-playing-overlay');
+  if (!overlay || pic === npGradientSource) return;
+  npGradientSource = pic || '';
+  overlay.style.setProperty('--np-art-color', '#252525');
+  if (!pic || !artEl) return;
+  function sample() {
+    if (npGradientSource !== pic || !artEl.naturalWidth) return;
+    try {
+      var canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 12;
+      var ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(artEl, 0, 0, 12, 12);
+      var data = ctx.getImageData(0, 0, 12, 12).data;
+      var r = 0, g = 0, b = 0, count = 0;
+      for (var i = 0; i < data.length; i += 4) {
+        if (data[i + 3] < 128) continue;
+        r += data[i]; g += data[i + 1]; b += data[i + 2]; count++;
+      }
+      if (count) overlay.style.setProperty('--np-art-color', 'rgb(' + Math.round(r / count) + ',' + Math.round(g / count) + ',' + Math.round(b / count) + ')');
+    } catch (_) { /* Cross-origin artwork keeps the neutral surface. */ }
+  }
+  if (artEl.complete) sample(); else artEl.addEventListener('load', sample, { once: true });
+}
 function updateNowPlayingOverlay() {
   var track = state.currentPlayingTrack;
   var artEl = document.getElementById('np-art');
@@ -682,9 +710,25 @@ function updateNowPlayingOverlay() {
   var artWrap = document.getElementById('np-art-wrap');
   if (track) {
     var pic = getTrackArtworkUrl(track);
-    if (artEl) { if (pic) artEl.src = pic; else artEl.removeAttribute('src'); artEl.alt = pic ? ('Cover for ' + (track.album || track.title || 'current track')) : ''; artEl.style.display = pic ? 'block' : 'none'; }
-    if (placeholder) placeholder.style.display = pic ? 'none' : 'flex';
-    if (bgBlur) bgBlur.style.backgroundImage = pic ? 'url("' + pic.replace(/"/g, '\\"') + '")' : '';
+    if (artEl) {
+      artEl.onerror = function () {
+        if (state.currentPlayingTrack !== track || artEl.getAttribute('src') !== pic) return;
+        artEl.style.display = 'none';
+        if (placeholder) placeholder.style.display = 'flex';
+      };
+      artEl.onload = function () {
+        if (state.currentPlayingTrack !== track || artEl.getAttribute('src') !== pic) return;
+        artEl.style.display = 'block';
+        if (placeholder) placeholder.style.display = 'none';
+      };
+      if (pic && artEl.getAttribute('src') !== pic) artEl.src = pic;
+      else if (!pic) artEl.removeAttribute('src');
+      artEl.alt = pic ? ('Cover for ' + (track.album || track.title || 'current track')) : '';
+      artEl.style.display = pic ? 'block' : 'none';
+    }
+    if (placeholder) placeholder.style.display = pic && artEl && artEl.complete && artEl.naturalWidth ? 'none' : 'flex';
+    if (bgBlur) bgBlur.style.backgroundImage = '';
+    updateNPArtworkGradient(pic, artEl);
     if (titleEl) titleEl.textContent = track.title || '';
     if (artistEl) artistEl.textContent = track.artist || '';
     if (albumEl) albumEl.textContent = track.album || '';
@@ -692,6 +736,7 @@ function updateNowPlayingOverlay() {
     if (artistEl) artistEl.disabled = !isSearchablePlaybackArtist(track.artist);
     if (artWrap) artWrap.tabIndex = pic ? 0 : -1;
   } else {
+    updateNPArtworkGradient('', artEl);
     if (artEl) { artEl.removeAttribute('src'); artEl.alt = ''; artEl.style.display = 'none'; }
     if (placeholder) placeholder.style.display = 'flex';
     if (bgBlur) bgBlur.style.backgroundImage = '';
@@ -712,6 +757,11 @@ function mirrorLyricsToNP() {
   npLyricsActiveIdx = -2;
   npLc.innerHTML = '';
   if (!lyricsData || !lyricsData.length) {
+    var loadingLyrics = $('lyrics-content') && $('lyrics-content').querySelector('.ph-spinner');
+    if (loadingLyrics) {
+      npLc.innerHTML = '<div class="np-lyrics-searching" role="status">Searching lyrics…</div>';
+      return;
+    }
     if (plainLyricsText) {
       plainLyricsText.split('\n').forEach(function (line) {
         var plainLine = document.createElement('div');
@@ -761,7 +811,7 @@ function updateNPLyricsHighlight(currentTime) {
       var now = Date.now();
       if (npLc && now - npLyricsLastScrollAt > 700) {
         npLyricsLastScrollAt = now;
-        npLc.scrollTo({ top: el.offsetTop - (npLc.clientHeight / 2) + (el.clientHeight / 2), behavior: 'auto' });
+        npLc.scrollTo({ top: el.offsetTop - (npLc.clientHeight * .35) + (el.clientHeight / 2), behavior: 'auto' });
       }
     }
   });
@@ -782,15 +832,12 @@ let _npLyricsToggle = null;
 
 let _npQueueToggle = null;
 
-let _npQueueTab = null; 
-let _npLyricsTab = null; 
 let _npLyricsOffsetDown = null;
 
 let _npLyricsOffsetUp = null;
 
 let _npLyricsContent = null;
 
-let _npOverlayEl = null;
 
 let _npArtWrap = null;
 
@@ -1004,7 +1051,65 @@ async function addTracksToPlaylist(pl, tracksToAdd) {
   }
   return addedCount;
 }
+var activeSettingsPage = 'library';
+function showSettingsPage(page) {
+  var buttons = document.querySelectorAll('.settings-nav-item');
+  var sections = document.querySelectorAll('#settings-sections > .settings-section[data-settings-page]');
+  if (!Array.from(buttons).some(function (button) { return button.dataset.settingsPage === page; })) return;
+  activeSettingsPage = page;
+  buttons.forEach(function (button) {
+    var selected = button.dataset.settingsPage === page;
+    button.classList.toggle('active', selected);
+    if (selected) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+    if (selected) button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+  sections.forEach(function (section) {
+    section.hidden = section.dataset.settingsPage !== page;
+    if (!section.hidden && !Array.from(sections).some(function (other) { return other !== section && other.dataset.settingsPage === page && other.open; })) section.open = true;
+  });
+  var list = $('settings-sections');
+  if (list) list.scrollTop = 0;
+  if (page === 'discord') refreshDiscordHealth();
+}
+
+async function refreshDiscordHealth() {
+  var modal = $('settings-modal');
+  if (!modal || !modal.classList.contains('active') || activeSettingsPage !== 'discord' || !window.api.discordStatus) return;
+  var result;
+  try { result = await window.api.discordStatus(); }
+  catch (error) { result = { enabled: false, error: String(error && error.message || error) }; }
+  var enabled = !!appSettings.discordRpc;
+  var status = $('discord-status-text');
+  var playback = $('discord-playback-text');
+  var artwork = $('discord-artwork-text');
+  var errorText = $('discord-error-text');
+  var retry = $('btn-discord-retry');
+  var retryArtwork = $('btn-discord-artwork-retry');
+  var openArtwork = $('btn-discord-open-artwork');
+  if (status) status.textContent = !enabled ? 'Off' : result.enabled ? 'Connected' : result.connecting ? 'Connecting…' : 'Disconnected';
+  if (playback) playback.textContent = !enabled ? 'Sharing off' : result.playback === 'playing' ? 'Playing' : result.playback === 'paused' || state.currentPlayingTrack && !state.isPlaying ? 'Paused' : 'No track shared';
+  var source = appSettings.discordArtworkSource || 'lookup';
+  var cover = result.artwork || {};
+  if (artwork) artwork.textContent = !enabled ? 'Sharing off' : source === 'logo' ? 'Playerinyo icon' : source === 'online' ? (result.playback === 'playing' || result.playback === 'paused' ? result.imageIsFallback ? 'No online cover · using icon' : 'Using track’s online cover' : 'Waiting for a track') : cover.status === 'searching' ? 'Searching…' : cover.status === 'matched' ? 'Found · ' + (cover.source || 'Cover Art Archive') + (cover.release ? ' · ' + cover.release : '') : cover.status === 'not-found' ? (result.imageIsFallback ? 'No confident match · using icon' : 'No match · using track’s online cover') : cover.status === 'error' ? (result.imageIsFallback ? 'Search failed · using icon' : 'Search failed · using track’s online cover') : 'Waiting for a track';
+  if (openArtwork) { openArtwork.hidden = !enabled || source !== 'lookup' || cover.status !== 'matched' || !/^https:\/\//.test(cover.url || ''); openArtwork.dataset.url = openArtwork.hidden ? '' : cover.url; }
+  var message = enabled && (result.error || cover.status === 'error' && cover.error || '');
+  if (errorText) { errorText.hidden = !message; errorText.textContent = message || ''; }
+  if (retry) retry.hidden = !enabled || !!result.enabled || !!result.connecting;
+  if (retryArtwork) retryArtwork.hidden = !enabled || source !== 'lookup' || result.playback !== 'playing' || cover.status !== 'error' && cover.status !== 'not-found';
+}
+
 function initSettingsControls() {
+  document.querySelectorAll('.settings-nav-item').forEach(function (button) {
+    button.addEventListener('click', function () { showSettingsPage(button.dataset.settingsPage); });
+  });
+  window.addEventListener('resize', function () {
+    var modal = $('settings-modal');
+    if (!modal || !modal.classList.contains('active')) return;
+    var selected = document.querySelector('.settings-nav-item.active');
+    if (selected) selected.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+  showSettingsPage(activeSettingsPage);
   commandPaletteModal = $('command-palette-modal');
   if (commandPaletteModal) commandPaletteModal.addEventListener('click', function (e) { if (e.target === commandPaletteModal) closeCommandPalette(); });
   commandPaletteInput = $('command-palette-input');
@@ -1081,8 +1186,6 @@ function initSettingsControls() {
   }
   togglePlBtn = $('toggle-playlist-view-btn');
   if (togglePlBtn) togglePlBtn.style.display = 'none';
-  btnFullscreenPl = $('btn-fullscreen-playlists');
-  if (btnFullscreenPl) btnFullscreenPl.addEventListener('click', function () { switchView('home'); });
   winMinimize = $('window-minimize');
   if (winMinimize) winMinimize.addEventListener('click', function () { if (window.api.windowControl) window.api.windowControl('minimize'); });
   winMaximize = $('window-maximize');
@@ -1278,20 +1381,62 @@ function initSettingsControls() {
   if (settDiscord) settDiscord.addEventListener('change', async function (e) {
     appSettings.discordRpc = e.target.checked;
     await persistSettings(appSettings);
-    var statusEl = $('discord-status-text');
-    if (e.target.checked) {
-      if (statusEl) statusEl.textContent = 'Connecting...';
-      setTimeout(async function () {
-        var res = await window.api.discordStatus();
-        if (statusEl) {
-          if (res.enabled) statusEl.textContent = 'Connected';
-          else statusEl.textContent = 'Could not connect: ' + (res.error || 'Discord not running');
-        }
-      }, 3000);
-    } else {
-      if (statusEl) statusEl.textContent = 'Disconnected';
-    }
+    syncDiscordPlaybackActivity(true);
+    refreshDiscordHealth();
   });
+  [
+    ['setting-discord-artwork-source', 'discordArtworkSource', 'value'],
+    ['setting-discord-progress', 'discordShowProgress', 'checked'],
+    ['setting-discord-paused', 'discordShowPaused', 'checked'],
+    ['setting-discord-text-format', 'discordTextFormat', 'value'],
+  ].forEach(function (entry) {
+    var input = $(entry[0]);
+    if (!input) return;
+    input.addEventListener('change', async function () {
+      appSettings[entry[1]] = input[entry[2]];
+      await persistSettings(appSettings);
+      syncDiscordPlaybackActivity(true);
+      refreshDiscordHealth();
+    });
+  });
+  var discordApplicationIdInput = $('setting-discord-application-id');
+  if (discordApplicationIdInput) discordApplicationIdInput.addEventListener('change', async function () {
+    var id = discordApplicationIdInput.value.trim();
+    var statusEl = $('discord-status-text');
+    if (id && !/^[0-9]{17,20}$/.test(id)) {
+      discordApplicationIdInput.setCustomValidity('Enter a 17–20 digit Discord Application ID.');
+      discordApplicationIdInput.reportValidity();
+      if (statusEl) statusEl.textContent = 'Invalid Application ID';
+      return;
+    }
+    discordApplicationIdInput.setCustomValidity('');
+    discordApplicationIdInput.value = id;
+    appSettings.discordApplicationId = id;
+    if (statusEl && appSettings.discordRpc) statusEl.textContent = id ? 'Connecting...' : 'Add a Discord Application ID';
+    await persistSettings(appSettings);
+    refreshDiscordHealth();
+  });
+  var discordPortalButton = $('btn-discord-developer-portal');
+  if (discordPortalButton) discordPortalButton.addEventListener('click', function () { window.api.openExternal('https://discord.com/developers/applications'); });
+  var discordRetryButton = $('btn-discord-retry');
+  if (discordRetryButton) discordRetryButton.addEventListener('click', async function () {
+    discordRetryButton.disabled = true;
+    try { await window.api.discordReconnect(); }
+    finally { discordRetryButton.disabled = false; refreshDiscordHealth(); }
+  });
+  var discordArtworkRetryButton = $('btn-discord-artwork-retry');
+  if (discordArtworkRetryButton) discordArtworkRetryButton.addEventListener('click', async function () {
+    discordArtworkRetryButton.disabled = true;
+    try { await window.api.discordRetryArtwork(); }
+    finally { discordArtworkRetryButton.disabled = false; refreshDiscordHealth(); }
+  });
+  var discordOpenArtworkButton = $('btn-discord-open-artwork');
+  if (discordOpenArtworkButton) discordOpenArtworkButton.addEventListener('click', function () {
+    if (discordOpenArtworkButton.dataset.url) window.api.openExternal(discordOpenArtworkButton.dataset.url);
+  });
+  if (window.api.discordStatus) setInterval(function () {
+    refreshDiscordHealth();
+  }, 2500);
   settCrossfade = $('setting-crossfade');
   if (settCrossfade) {
     settCrossfade.addEventListener('input', function (e) {
@@ -1412,28 +1557,18 @@ function initSettingsControls() {
   if (_npBtnLike) _npBtnLike.addEventListener('click', toggleCurrentTrackLike);
   _npLyricsToggle = document.getElementById('np-lyrics-toggle');
   if (_npLyricsToggle) _npLyricsToggle.addEventListener('click', function () {
-    setNPSecondaryPanel(npSecondaryPanel === 'lyrics' ? 'queue' : 'lyrics');
+    setNPSecondaryPanel(npSecondaryPanel === 'lyrics' ? 'none' : 'lyrics');
     applyNPLyricsVisibility();
     if (npSecondaryPanel === 'lyrics' && state.currentPlayingTrack && (!lyricsData || !lyricsData.length)) fetchLyricsForTrack(state.currentPlayingTrack);
   });
   _npQueueToggle = document.getElementById('np-queue-toggle');
-  if (_npQueueToggle) _npQueueToggle.addEventListener('click', function () { setNPSecondaryPanel(npSecondaryPanel === 'queue' ? 'lyrics' : 'queue'); applyNPLyricsVisibility(); });
-  _npQueueTab = $('np-queue-tab');
-  if (_npQueueTab) _npQueueTab.addEventListener('click', function () { setNPSecondaryPanel('queue'); applyNPLyricsVisibility(); });
-  _npLyricsTab = $('np-lyrics-tab');
-  if (_npLyricsTab) _npLyricsTab.addEventListener('click', function () { setNPSecondaryPanel('lyrics'); applyNPLyricsVisibility(); });
+  if (_npQueueToggle) _npQueueToggle.addEventListener('click', function () { setNPSecondaryPanel(npSecondaryPanel === 'queue' ? 'none' : 'queue'); applyNPLyricsVisibility(); });
   _npLyricsOffsetDown = document.getElementById('np-lyrics-offset-down');
   if (_npLyricsOffsetDown) _npLyricsOffsetDown.addEventListener('click', function () { setLyricsOffset(lyricsOffsetSec - 0.5); });
   _npLyricsOffsetUp = document.getElementById('np-lyrics-offset-up');
   if (_npLyricsOffsetUp) _npLyricsOffsetUp.addEventListener('click', function () { setLyricsOffset(lyricsOffsetSec + 0.5); });
   _npLyricsContent = document.getElementById('np-lyrics-content');
   if (_npLyricsContent) _npLyricsContent.addEventListener('contextmenu', openManualLyricsSearch);
-  _npOverlayEl = document.getElementById('now-playing-overlay');
-  if (_npOverlayEl) _npOverlayEl.addEventListener('contextmenu', function (e) {
-    if (e.target.closest('#np-lyrics-content')) return;
-    if (e.target.closest('button') || e.target.closest('#np-progress-container')) return;
-    openManualLyricsSearch(e);
-  });
   _npArtWrap = document.getElementById('np-art-wrap');
   if (_npArtWrap) {
     _npArtWrap.addEventListener('click', function () { var art = document.getElementById('np-art'); if (art && art.src) openCurrentPlaybackArtwork(art.currentSrc || art.src); });

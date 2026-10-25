@@ -3372,10 +3372,6 @@ body[data-visual-world="projection-room"] .empty-library-notes {
     justify-content: center;
   }
 
-  body[data-visual-world="projection-room"] .playlist-workspace-actions .icon-btn {
-    margin-inline-start: auto;
-  }
-
   body[data-visual-world="projection-room"] .smart-mix-builder {
     width: calc(100vw - 16px);
     max-height: calc(100vh - 16px);
