@@ -10,6 +10,8 @@ const rendererFiles = [
   'renderer-library-playback.js',
   'renderer-playback-downloads.js',
   'renderer-downloads-ui.js',
+  'renderer-spotify-account.js',
+  'renderer-artist-profile.js',
   'renderer-import-review.js',
   'renderer-lyrics.js',
   'renderer-audio-output.js',

@@ -241,9 +241,11 @@ const lastfmRadioDiscoveryClient = window.api ? {
   start: function (request) { return window.api.lastfmDiscoveryStart(request); },
   next: function (session, options) { return window.api.lastfmDiscoveryNext(session, options); }
 } : null;
+const songRadioDiscoveryClient = window.api ? { similar: function (seed) { return window.api.getSongRadioSimilar(seed); } } : null;
 const radioProviderRegistry = window.RadioProviders ? window.RadioProviders.createRadioProviderRegistry([
   window.RadioProviders.createLocalLibraryProvider(),
-  window.RadioProviders.createLastfmProvider(lastfmRadioDiscoveryClient)
+  window.RadioProviders.createLastfmProvider(lastfmRadioDiscoveryClient),
+  window.RadioProviders.createSongRadioProvider(songRadioDiscoveryClient)
 ]) : null;
 let radioUiState = { providerId: 'local-library', genres: [], selectedGenreId: '', search: '', loading: false, starting: false, startingStationId: '', error: '', loaded: false, preparation: '' };
 const RADIO_REFILL_THRESHOLD = 8;
@@ -258,6 +260,7 @@ let remotePreparationInFlight = window.RemotePreparationCoordinator && window.Re
   : null;
 let radioResolverRequestSequence = 0;
 let pendingRadioStartSession = null;
+let songRadioPreviousQueue = null;
 function radioDebug(stage, fields) {
   if (window.api && window.api.radioDebugEvent) window.api.radioDebugEvent({ stage: stage, fields: fields || {} });
 }
@@ -1508,7 +1511,7 @@ function setViewKind(kind) {
   syncDockPlaylistStates();
 }
 function hideAllViewRoots() {
-  ['home-dashboard-container', 'albums-grid-container', 'tracks-table-container', 'search-albums-container', 'playlists-grid-container', 'stats-container', 'metadata-health-container', 'radio-container', 'youtube-music-results'].forEach(function (id) {
+  ['home-dashboard-container', 'albums-grid-container', 'tracks-table-container', 'search-albums-container', 'playlists-grid-container', 'stats-container', 'metadata-health-container', 'radio-container', 'youtube-music-results', 'artist-profile-container', 'download-queue-panel'].forEach(function (id) {
     var el = $(id); if (el) el.style.display = 'none';
   });
   var detail = $('album-detail-header'); if (detail) detail.style.display = 'none';

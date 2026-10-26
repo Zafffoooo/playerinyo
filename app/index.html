@@ -62,6 +62,7 @@
             <i class="ph ph-download-simple" aria-hidden="true"></i>
             <span>Downloads</span>
             <b id="download-queue-badge" class="download-queue-badge"></b>
+            <div class="download-dock-progress" id="download-dock-progress" hidden><span class="download-dock-top"><span id="download-dock-label"></span><span id="download-dock-count"></span></span><span class="download-dock-track"><span id="download-dock-bar"></span></span></div>
           </button>
           <button type="button" class="nav-item" id="nav-health">
             <i class="ph ph-stethoscope" aria-hidden="true"></i>
@@ -134,7 +135,34 @@
           <!-- Stats Dashboard (standalone - kept for programmatic use) -->
           <div id="stats-container" style="display:none;padding:24px;padding-bottom:60px;"></div>
           <div id="metadata-health-container" style="display:none;padding:24px;padding-bottom:60px;"></div>
+          <section id="download-queue-panel" class="download-queue-panel" aria-labelledby="download-queue-title" style="display:none;">
+            <div class="download-queue-head">
+              <div><h1 id="download-queue-title">Downloads</h1><p id="download-queue-summary">No active downloads</p></div>
+              <div class="download-queue-actions">
+                <button class="btn btn-outline" id="download-album-start" type="button"><i class="ph ph-vinyl-record" aria-hidden="true"></i> Download album</button>
+                <button class="btn btn-outline" id="download-search-toggle" type="button"><i class="ph ph-magnifying-glass" aria-hidden="true"></i> Search &amp; Download</button>
+                <button class="btn btn-outline" id="download-queue-clear" title="Clear completed and failed downloads" aria-label="Clear completed and failed downloads"><i class="ph ph-broom" aria-hidden="true"></i> Clear history</button>
+              </div>
+            </div>
+            <section class="download-search" id="download-search" hidden aria-labelledby="download-search-title">
+              <div class="download-search-heading"><strong id="download-search-title">Search &amp; Download</strong><span>Choose a YouTube result to add it to the download queue.</span></div>
+              <form class="download-search-form" id="download-search-form">
+                <input type="search" id="download-search-query" class="meta-inp" placeholder="Artist — track" autocomplete="off" aria-label="Artist and track">
+                <button class="btn btn-primary" id="download-search-submit" type="submit"><i class="ph ph-magnifying-glass" aria-hidden="true"></i> Search</button>
+              </form>
+              <div id="download-search-status" class="download-search-status" role="status" aria-live="polite"></div>
+              <div id="download-search-results" class="download-search-results" aria-live="polite"></div>
+            </section>
+            <div class="download-queue-filters" role="group" aria-label="Filter download jobs">
+              <button type="button" data-download-filter="all" aria-pressed="true">All</button>
+              <button type="button" data-download-filter="active" aria-pressed="false">In progress</button>
+              <button type="button" data-download-filter="done" aria-pressed="false">Completed</button>
+              <button type="button" data-download-filter="failed" aria-pressed="false">Needs attention</button>
+            </div>
+            <div id="download-queue-list" class="download-queue-list"></div>
+          </section>
           <section id="youtube-music-results" class="youtube-music-results" hidden aria-live="polite"></section>
+          <section id="artist-profile-container" class="artist-profile" style="display:none;" aria-live="polite"></section>
           <section id="radio-container" class="radio-view" style="display:none;" aria-labelledby="radio-title"></section>
 
           <section id="playlists-grid-container" class="playlist-workspace" style="display:none;" aria-labelledby="playlists-workspace-title">
@@ -450,6 +478,7 @@
   <!-- ══════════════ NOW PLAYING OVERLAY ══════════════ -->
   <div id="now-playing-overlay" class="np-overlay" role="dialog" aria-modal="true" aria-label="Now Playing" aria-hidden="true" inert>
     <!-- Blurred bg pulled from album art -->
+    <div class="np-bg-art" id="np-bg-art" aria-hidden="true"></div>
     <div class="np-bg-blur" id="np-bg-blur"></div>
     <div class="np-bg-vignette"></div>
 
@@ -526,34 +555,6 @@
   </div>
 
   <!-- ─── MODALS ─── -->
-
-  <div id="download-queue-panel" class="download-queue-panel" role="region" aria-labelledby="download-queue-title" aria-hidden="true">
-    <div class="download-queue-head">
-      <div>
-        <strong id="download-queue-title">Downloads</strong>
-        <span id="download-queue-summary">No active downloads</span>
-      </div>
-      <div class="download-queue-actions">
-        <button class="icon-btn ghost" id="download-album-start" title="Download album" aria-label="Download album"><i class="ph ph-vinyl-record" aria-hidden="true"></i></button>
-        <button class="icon-btn ghost" id="download-search-toggle" title="Search & Download" aria-label="Search and download"><i class="ph ph-magnifying-glass"></i></button>
-        <button class="icon-btn ghost" id="download-queue-clear" title="Clear completed and failed downloads" aria-label="Clear completed and failed downloads"><i class="ph ph-broom"></i></button>
-        <button class="icon-btn ghost" id="download-queue-close" title="Close" aria-label="Close downloads"><i class="ph ph-x"></i></button>
-      </div>
-    </div>
-    <section class="download-search" id="download-search" hidden aria-labelledby="download-search-title">
-      <div class="download-search-heading">
-        <strong id="download-search-title">Search &amp; Download</strong>
-        <span>Choose a YouTube result to add it to the download queue.</span>
-      </div>
-      <form class="download-search-form" id="download-search-form">
-        <input type="search" id="download-search-query" class="meta-inp" placeholder="Artist — track" autocomplete="off" aria-label="Artist and track">
-        <button class="btn btn-primary" id="download-search-submit" type="submit"><i class="ph ph-magnifying-glass" aria-hidden="true"></i> Search</button>
-      </form>
-      <div id="download-search-status" class="download-search-status" role="status" aria-live="polite"></div>
-      <div id="download-search-results" class="download-search-results" aria-live="polite"></div>
-    </section>
-    <div id="download-queue-list" class="download-queue-list"></div>
-  </div>
 
   <div id="command-palette-modal" class="modal-overlay command-palette-overlay">
     <div class="command-palette modal-content">
@@ -633,7 +634,15 @@
   <div id="playlist-import-source-modal" class="modal-overlay">
     <div class="modal-content playlist-source-modal">
       <h2 id="playlist-import-source-title">Import Playlist</h2>
-      <div class="playlist-source-choice"><button type="button" class="btn btn-outline" id="playlist-import-file-choice">File</button><button type="button" class="btn btn-outline" id="playlist-import-link-choice">Link</button></div>
+      <div class="playlist-source-choice"><button type="button" class="btn btn-outline" id="playlist-import-file-choice">File</button><button type="button" class="btn btn-outline" id="playlist-import-link-choice">Link</button><button type="button" class="btn btn-outline" id="playlist-import-account-choice">Spotify account</button></div>
+      <div id="playlist-import-account-fields" class="spotify-account-import" hidden>
+        <p id="spotify-account-status" role="status" aria-live="polite"></p>
+        <div class="spotify-account-actions"><button type="button" class="btn btn-primary" id="spotify-account-connect">Connect Spotify</button><button type="button" class="btn btn-outline" id="spotify-account-disconnect" hidden>Disconnect</button><button type="button" class="btn btn-outline" id="spotify-account-refresh" hidden>Refresh playlists</button></div>
+        <p class="spotify-account-hint">Your own and collaborative playlists are available. The Spotify Developer app must allow your account.</p>
+        <div id="spotify-account-playlists" class="spotify-account-playlists"></div>
+        <p id="spotify-account-import-progress" role="status" aria-live="polite"></p>
+        <button type="button" class="btn btn-outline" id="spotify-account-cancel-import" hidden>Cancel reading</button>
+      </div>
       <div id="playlist-import-link-fields" hidden>
         <label for="playlist-import-url">Public Spotify or YouTube Music playlist URL</label>
         <input type="url" id="playlist-import-url" class="meta-inp" placeholder="https://music.youtube.com/playlist?list=…" autocomplete="off">
@@ -646,9 +655,12 @@
   <div id="playlist-import-modal" class="modal-overlay">
     <div class="modal-content playlist-import-modal" style="width:min(900px,calc(100vw - 48px));max-height:88vh;display:flex;flex-direction:column;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px;">
-        <div>
+        <div class="playlist-import-review-heading">
+          <img id="playlist-import-cover-preview" class="playlist-import-cover-preview" alt="Playlist cover" hidden>
+          <div>
           <h2 id="playlist-import-title" style="margin:0 0 6px;">Import Playlist</h2>
           <div id="playlist-import-subtitle" style="color:var(--text-subdued);font-size:13px;line-height:1.4;"></div>
+          </div>
         </div>
         <button class="icon-btn ghost" id="playlist-import-cancel-x" title="Cancel"><i class="ph ph-x"></i></button>
       </div>
@@ -1532,6 +1544,8 @@
   <script src="renderer-library-playback.js"></script>
   <script src="renderer-playback-downloads.js"></script>
   <script src="renderer-downloads-ui.js"></script>
+  <script src="renderer-spotify-account.js"></script>
+  <script src="renderer-artist-profile.js"></script>
   <script src="renderer-import-review.js"></script>
   <script src="renderer-lyrics.js"></script>
   <script src="renderer-audio-output.js"></script>

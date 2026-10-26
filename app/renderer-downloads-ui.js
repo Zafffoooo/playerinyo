@@ -1,3 +1,14 @@
+var downloadQueueFilter = 'all';
+var downloadQueueExpandedJobs = new Set();
+function downloadJobCoverUrl(job) {
+  if (job.coverUrl) return job.coverUrl;
+  for (var item of job.items || []) {
+    if (item.row && item.row.CoverUrl) return item.row.CoverUrl;
+    var file = state.musicFiles.find(function (entry) { return entry.filePath && item.filePath && stripFileUrl(entry.filePath) === stripFileUrl(item.filePath); });
+    if (file && file.picture) return file.picture;
+  }
+  return '';
+}
 function renderDownloadQueue() {
   var panel = $('download-queue-panel');
   var list = $('download-queue-list');
@@ -13,6 +24,28 @@ function renderDownloadQueue() {
     badge.style.display = activeItems ? 'flex' : 'none';
   }
   var running = getDownloadQueueRunningJob();
+  var currentItem = running && (running.items || []).find(function (item) { return item.status === 'downloading' || item.status === 'searching'; });
+  var dockProgress = $('download-dock-progress');
+  var dockLabel = $('download-dock-label');
+  var dockCount = $('download-dock-count');
+  var dockBar = $('download-dock-bar');
+  var dockJob = running || downloadQueue.find(function (job) { return job.status === 'queued'; });
+  if (dockProgress) dockProgress.hidden = !dockJob;
+  if (dockJob && dockLabel) {
+    var currentIndex = currentItem ? (dockJob.items || []).indexOf(currentItem) : -1;
+    var count = (dockJob.items || []).filter(function (item) { return item.status === 'done'; }).length;
+    var shownIndex = currentIndex >= 0 ? currentIndex + 1 : (dockJob.status === 'queued' ? 0 : Math.min(dockJob.total, count + 1));
+    var row = currentItem && currentItem.row || (dockJob.items || [])[shownIndex - 1]?.row || {};
+    dockLabel.textContent = [getImportTrackArtist(row) || currentItem?.artist || '', getImportTrackAlbum(row) || dockJob.title || ''].filter(Boolean).join(' · ') || 'Preparing download';
+    if (dockCount) dockCount.textContent = shownIndex + '/' + dockJob.total;
+    var dockButton = $('btn-download-queue');
+    dockButton.title = dockLabel.textContent + ' · ' + shownIndex + '/' + dockJob.total;
+    dockButton.setAttribute('aria-label', 'Open downloads, ' + dockButton.title);
+  }
+  if (dockBar) {
+    dockBar.style.width = currentItem && Number.isFinite(currentItem.downloadPercent) ? Math.max(0, Math.min(100, currentItem.downloadPercent)) + '%' : '0%';
+  }
+  if (!dockJob && dockCount) { dockCount.textContent = ''; $('btn-download-queue').title = 'Downloads'; $('btn-download-queue').setAttribute('aria-label', 'Open downloads'); }
   if (summary) {
     if (running) summary.textContent = running.status === 'checking' ? 'Checking download tools' : 'Running ' + running.current + '/' + running.total;
     else if (downloadQueue.some(function (job) { return job.status === 'queued'; })) summary.textContent = 'Waiting to start';
@@ -22,12 +55,17 @@ function renderDownloadQueue() {
   if (!downloadQueuePanelOpen) return;
   if (!list) return;
   list.innerHTML = '';
-  if (!downloadQueue.length) {
-    list.innerHTML = '<div class="download-queue-empty">No downloads queued.</div>';
-    requestAnimationFrame(positionDownloadQueuePanel);
+  var visibleJobs = downloadQueue.filter(function (job) {
+    if (downloadQueueFilter === 'active') return ['queued', 'checking', 'running'].includes(job.status);
+    if (downloadQueueFilter === 'done') return job.status === 'done';
+    if (downloadQueueFilter === 'failed') return job.status === 'failed' || job.failed > 0;
+    return true;
+  });
+  if (!visibleJobs.length) {
+    list.innerHTML = '<div class="download-queue-empty">' + (downloadQueue.length ? 'No downloads in this view.' : 'No downloads yet. Search for a track or choose an album to begin.') + '</div>';
     return;
   }
-  downloadQueue.slice().reverse().forEach(function (job) {
+  visibleJobs.slice().reverse().forEach(function (job) {
     var card = document.createElement('div');
     card.className = 'download-job ' + (job.status || 'queued');
     var pct = job.total ? Math.round((job.current / job.total) * 100) : 0;
@@ -35,14 +73,25 @@ function renderDownloadQueue() {
     if (job.status === 'failed') actionsHtml = '<button type="button" class="download-job-mini-btn retry" data-job-id="' + esc(job.id) + '">Retry failed</button>';
     else if (job.status === 'queued' || job.status === 'running') actionsHtml = '<button type="button" class="download-job-mini-btn cancel" data-job-id="' + esc(job.id) + '">' + (job.status === 'running' ? 'Stop' : 'Cancel') + '</button>';
     var qualityLabel = { 'best-native': 'Best Native', opus: 'Opus', m4a: 'M4A / AAC', mp3: 'MP3' }[job.quality] || 'Best Native';
-    card.innerHTML = '<div class="download-job-top"><div><strong>' + esc(job.title || 'Download job') + '</strong><span>' + esc(job.statusLabel || job.status || 'queued') + ' • ' + esc(qualityLabel) + ' • ' + job.current + '/' + job.total + '</span></div><div class="download-job-side"><em>' + pct + '%</em>' + actionsHtml + '</div></div>' +
+    var coverUrl = job.type === 'album-release' ? downloadJobCoverUrl(job) : '';
+    var coverHtml = /^(?:https:\/\/|file:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(coverUrl) ? '<img class="download-job-cover" src="' + esc(coverUrl) + '" alt="" />' : '';
+    var collapsed = job.status === 'done' && !downloadQueueExpandedJobs.has(job.id);
+    card.innerHTML = '<div class="download-job-top">' + coverHtml + '<div class="download-job-heading"><strong>' + esc(job.title || 'Download job') + '</strong><span>' + esc(job.statusLabel || job.status || 'queued') + ' • ' + esc(qualityLabel) + ' • ' + job.current + '/' + job.total + '</span></div><div class="download-job-side"><em>' + pct + '%</em>' + actionsHtml + '</div></div>' +
       '<div class="download-job-bar"><span style="width:' + pct + '%"></span></div>';
+    if (job.status === 'done') {
+      var expand = document.createElement('button'); expand.type = 'button'; expand.className = 'download-job-expand';
+      expand.textContent = (collapsed ? 'Show ' : 'Hide ') + (job.items || []).length + ' tracks';
+      expand.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      expand.addEventListener('click', function () { if (collapsed) downloadQueueExpandedJobs.add(job.id); else downloadQueueExpandedJobs.delete(job.id); renderDownloadQueue(); });
+      card.appendChild(expand);
+    }
     var retryBtn = card.querySelector('.download-job-mini-btn.retry');
     if (retryBtn) retryBtn.addEventListener('click', function (e) { e.stopPropagation(); retryDownloadQueueJob(job.id); });
     var cancelBtn = card.querySelector('.download-job-mini-btn.cancel');
     if (cancelBtn) cancelBtn.addEventListener('click', function (e) { e.stopPropagation(); cancelDownloadQueueJob(job.id); });
     var items = document.createElement('div');
     items.className = 'download-job-items';
+    items.hidden = collapsed;
     (job.items || []).forEach(function (item, itemIndex) {
       var row = document.createElement('div');
       row.className = 'download-job-item ' + (item.status || 'queued');
@@ -118,45 +167,12 @@ function renderDownloadQueue() {
     card.appendChild(items);
     list.appendChild(card);
   });
-  requestAnimationFrame(positionDownloadQueuePanel);
 }
 function setDownloadQueuePanel(open) {
-  downloadQueuePanelOpen = !!open;
-  var trigger = $('btn-download-queue');
-  if (trigger) trigger.setAttribute('aria-expanded', downloadQueuePanelOpen ? 'true' : 'false');
-  if (!downloadQueuePanelOpen) {
-    cancelDirectDownloadSearch();
-    downloadQueue.forEach(function (job) {
-      (job.items || []).forEach(function (item) { if (item.candidateSearchBusy && item.row) cancelCandidateSearchRequest(item.row); });
-    });
-  }
-  renderDownloadQueue();
-  if (downloadQueuePanelOpen) requestAnimationFrame(function () {
-    positionDownloadQueuePanel();
-    var searchToggle = $('download-search-toggle');
-    if (searchToggle) searchToggle.focus();
-  });
-  else if (trigger) requestAnimationFrame(function () { trigger.focus(); });
+  if (open) switchView('downloads');
+  else if (state.currentView === 'downloads') switchView('home');
 }
 
-function positionDownloadQueuePanel() {
-  var panel = $('download-queue-panel');
-  var trigger = $('btn-download-queue');
-  if (!downloadQueuePanelOpen || !panel || !trigger) return;
-  var viewportPadding = 16;
-  var gap = 10;
-  var triggerRect = trigger.getBoundingClientRect();
-  var panelWidth = panel.offsetWidth || Math.min(420, window.innerWidth - (viewportPadding * 2));
-  var panelHeight = panel.offsetHeight || 0;
-  var left = triggerRect.right + gap;
-  if (left + panelWidth > window.innerWidth - viewportPadding) left = triggerRect.left - gap - panelWidth;
-  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - panelWidth - viewportPadding));
-  var top = triggerRect.top;
-  top = Math.max(viewportPadding, Math.min(top, window.innerHeight - panelHeight - viewportPadding));
-  panel.style.left = Math.round(left) + 'px';
-  panel.style.top = Math.round(top) + 'px';
-  panel.style.right = 'auto';
-}
 function cancelDirectDownloadSearch() {
   if (!directDownloadSearchRequestId) return;
   var requestId = directDownloadSearchRequestId;
@@ -261,6 +277,7 @@ function makeDownloadQueueJob(type, title, rows, playlistId, options) {
     playlistIds: options.playlistIds || (playlistId ? [playlistId] : []),
     savePlaylists: !!options.savePlaylists,
     title: title || 'Downloads',
+    coverUrl: options.coverUrl || '',
     status: 'queued',
     statusLabel: 'Queued',
     current: 0,
@@ -302,7 +319,7 @@ function enqueueImportedPlaylistDownloadJob(title, rows, firstPlaylistId, playli
 function enqueueAlbumDownloadJob(title, rows) {
   rows = (rows || []).filter(isAlbumDownloadRowMissing);
   if (!rows.length) { showToast('No missing tracks found for this album.'); return null; }
-  return pushDownloadQueueJob(makeDownloadQueueJob('album-release', title || 'Album Downloads', rows, ''), 'Queued ' + rows.length + ' album download' + (rows.length === 1 ? '' : 's') + '.');
+  return pushDownloadQueueJob(makeDownloadQueueJob('album-release', title || 'Album Downloads', rows, '', { coverUrl: rows[0].CoverUrl || '' }), 'Queued ' + rows.length + ' album download' + (rows.length === 1 ? '' : 's') + '.');
 }
 function cancelDownloadQueueJob(jobId) {
   var job = downloadQueue.find(function (j) { return j.id === jobId; });
@@ -623,6 +640,7 @@ function importPlaylistGroups(groups, conflictMode, source) {
   return { firstPlaylistId: firstPlaylistId, playlistIds: playlistIds, rows: importedRows };
 }
 function updatePlaylistImportActions() {
+  if (!pendingPlaylistImport) return;
   var rows = getPlaylistImportRows();
   var downloadable = rows.filter(function (item) { return isPlaylistImportDownloadEligible(item.row); });
   var selected = downloadable.filter(function (item) { return item.row.__downloadSelected !== false; }).length;
@@ -805,7 +823,7 @@ function renderPlaylistImportReview() {
     var matched = findPlaylistRecordMatch(row);
     var isMissing = !matched;
     if (matched) matchedCount++;
-    if (['invalid', 'local-unsupported', 'remote-unsupported', 'hls-unsupported'].includes(row.SourceStatus)) unusableCount++;
+    if (['invalid', 'unavailable', 'local-unsupported', 'remote-unsupported', 'hls-unsupported'].includes(row.SourceStatus)) unusableCount++;
     var localCandidate = isLocalPlaylistImportCandidate(row);
     var downloadable = isPlaylistImportDownloadEligible(row);
     var checkable = localCandidate || downloadable;
@@ -826,6 +844,7 @@ function renderPlaylistImportReview() {
     else if (sourceStatus === 'remote-unsupported') status = 'Remote blocked';
     else if (sourceStatus === 'hls-unsupported') status = 'HLS blocked';
     else if (sourceStatus === 'invalid') status = 'Invalid entry';
+    else if (sourceStatus === 'unavailable') status = 'Unavailable on Spotify';
     else if (row.__candidateLoading) status = 'Searching';
     else if (row.__candidateQueued) status = 'Queued';
     else if (row.__downloadStatus === 'done') status = 'Downloaded';
@@ -1253,7 +1272,7 @@ async function finishPlaylistImport(action) {
   var reimportTarget = pendingPlaylistImport.reimportTarget;
   if (reimportTarget) {
     pushUndoSnapshot('Reimport playlist', ['playlists']);
-    var newRows = pendingPlaylistImport.groups[0].tracks.filter(function (row) { return row.__importDiff === 'new'; });
+    var newRows = pendingPlaylistImport.groups[0].tracks.filter(function (row) { return row.__importDiff === 'new' && row.SourceStatus !== 'unavailable'; });
     newRows.forEach(function (row) { clearImportRowTransient(row); stampPlaylistTrackAddedAt(row, Date.now()); reimportTarget.tracks.push(row); });
     pendingPlaylistImport.groups[0].tracks.forEach(function (row) { if (row.__importDiff) clearImportRowTransient(row); });
     reimportTarget.importSource = { path: pendingPlaylistImport.sourcePath, format: pendingPlaylistImport.sourceFormat, group: reimportTarget.importSource.group };
@@ -1282,6 +1301,13 @@ async function finishPlaylistImport(action) {
   pushUndoSnapshot('Import playlist', ['library', 'playlists', 'mappings', 'libraryRoots']);
   var localResult = withLocalFiles ? await addSelectedPlaylistLocalFiles() : { added: 0, failed: 0, rootsChanged: false };
   var conflictMode = pendingPlaylistImport.conflictMode || 'create';
+  if (pendingPlaylistImport.sourceFormat === 'spotify-login') pendingPlaylistImport.groups.forEach(function (group) {
+    group.tracks = group.tracks.filter(function (row) { return row.SourceStatus !== 'unavailable'; });
+  });
+  if (pendingPlaylistImport.sourceFormat === 'spotify-login' && pendingPlaylistImport.groups.some(function (group) { return !group.tracks.length; })) {
+    $('playlist-import-status').textContent = 'This playlist has no usable tracks to import.';
+    return;
+  }
   var importResult = importPlaylistGroups(pendingPlaylistImport.groups, conflictMode, { path: pendingPlaylistImport.sourcePath, format: pendingPlaylistImport.sourceFormat });
   var seenQueueRows = new Set();
   var queueRows = withDownload ? importResult.rows.filter(function (row) {
@@ -1518,7 +1544,9 @@ function initDownloadControls() {
     try {
       var result = pl.importSource.format === 'url'
         ? await window.api.importPlaylistUrl(pl.importSource.path, 'reimport_' + Date.now())
-        : await window.api.importPlaylist();
+        : pl.importSource.format === 'spotify-login'
+          ? await window.api.importSpotifyAccountPlaylist(pl.importSource.path.replace(/^spotify:playlist:/, ''), 'reimport_' + Date.now())
+          : await window.api.importPlaylist();
       if (!result || result.canceled) return;
       if (!result.ok || !Array.isArray(result.records) || !result.records.length) { showToast((result && result.error) || 'Source playlist could not be read completely.'); return; }
       if (result.sourcePath !== pl.importSource.path) { showToast('Select the same source file used for this playlist.'); return; }
@@ -1723,14 +1751,49 @@ function initDownloadControls() {
     var sequence = ++musicSearchSequence;
     showMusicSearchView();
     musicResults.replaceChildren();
+    var artistMatches = document.createElement('section');
+    artistMatches.className = 'youtube-artist-results';
+    artistMatches.setAttribute('aria-label', 'Artists');
+    musicResults.appendChild(artistMatches);
+    var songArtists = [], queryArtists = [];
+    function renderArtistMatches() {
+      if (sequence !== musicSearchSequence || !artistMatches.isConnected) return;
+      var seen = new Set();
+      var artists = songArtists.concat(queryArtists).filter(function (artist) {
+        if (!artist || !artist.id || seen.has(artist.id)) return false;
+        seen.add(artist.id); return true;
+      });
+      renderSearchArtistCards(artistMatches, artists);
+    }
     var heading = document.createElement('h2'); heading.textContent = 'YouTube Music · Songs'; musicResults.appendChild(heading);
     var status = document.createElement('p'); status.textContent = query.length < 2 ? 'Enter at least two characters.' : 'Searching YouTube Music…'; musicResults.appendChild(status);
     if (query.length < 2) return;
+    if (window.api.searchArtistCatalog) {
+      window.api.searchArtistCatalog(query).then(function (artistResult) {
+        if (sequence !== musicSearchSequence || searchSource.value !== 'youtube-music' || !artistMatches.isConnected) return;
+        if (!artistResult || !artistResult.ok) return;
+        queryArtists = artistResult.artists || [];
+        renderArtistMatches();
+      }).catch(function () { /* Songs remain usable when catalog search is unavailable. */ });
+    }
     try {
       var result = await window.api.searchYouTubeMusic(query);
       var searchMs = Math.round(performance.now() - searchStartedAt);
       if (sequence !== musicSearchSequence || searchSource.value !== 'youtube-music') return;
       if (!result || !result.ok) { status.textContent = (result && result.error) || 'Search failed. Try again shortly.'; return; }
+      if (window.api.searchArtistCatalog) {
+        var seenNames = new Set();
+        var firstArtistNames = result.songs.map(function (song) { return song.artist; }).filter(function (name) {
+          var key = artistCatalogKey(name);
+          if (!key || seenNames.has(key)) return false;
+          seenNames.add(key); return true;
+        }).slice(0, 2);
+        Promise.all(firstArtistNames.map(function (name) {
+          return window.api.searchArtistCatalog(name).then(function (response) {
+            return response && response.ok && (response.artists || []).find(function (artist) { return artistCatalogKey(artist.name) === artistCatalogKey(name); });
+          }).catch(function () { return null; });
+        })).then(function (artists) { songArtists = artists.filter(Boolean); renderArtistMatches(); });
+      }
       status.textContent = result.songs.length ? result.songs.length + ' songs · Choose a version to play.' : 'No matching songs found.';
       result.songs.forEach(function (song) {
         var track = { candidateId: 'youtube-music:' + song.videoId, queueEntryId: createQueueEntryId(), title: song.title, artist: song.artist, album: '', duration: song.duration, artwork: song.artwork || '', playback: { kind: 'youtube', videoId: song.videoId } };
@@ -1744,6 +1807,7 @@ function initDownloadControls() {
         var playButton;
         [['Play', async function () {
           var playSequence = ++musicPlaySequence;
+          var previousQueue = captureQueueBeforeSongRadio();
           playButton.disabled = true;
           playButton.textContent = 'Preparing…';
           rowStatus.textContent = 'Preparing audio stream…';
@@ -1757,7 +1821,7 @@ function initDownloadControls() {
           try {
             var played = await playTrack(track, { preserveQueueCursors: true });
             if (playSequence !== musicPlaySequence) { playButton.textContent = 'Play'; rowStatus.textContent = ''; return; }
-            if (played) { playButton.textContent = 'Playing'; rowStatus.textContent = 'Playing now'; row.dataset.playbackStatus = 'playing'; console.info('YouTube Music play', { videoId: song.videoId, ms: Math.round(performance.now() - playStartedAt), searchMs: searchMs, cachedSearch: !!result.cached }); }
+            if (played) { startSongRadioFromSearch(track, previousQueue); playButton.textContent = 'Playing'; rowStatus.textContent = 'Playing now'; row.dataset.playbackStatus = 'playing'; console.info('YouTube Music play', { videoId: song.videoId, ms: Math.round(performance.now() - playStartedAt), searchMs: searchMs, cachedSearch: !!result.cached }); }
             else { playButton.textContent = 'Retry Play'; rowStatus.textContent = track._playbackError || 'Could not start this song. Try another version.'; row.dataset.playbackStatus = 'error'; }
           } catch (error) { if (playSequence === musicPlaySequence) { playButton.textContent = 'Retry Play'; rowStatus.textContent = (error && error.message) || 'Could not start this song.'; row.dataset.playbackStatus = 'error'; } }
           finally { if (candidateAudio) { candidateAudio.removeEventListener('loadstart', onMediaLoad); candidateAudio.removeEventListener('playing', onMediaPlaying); } playButton.disabled = false; }

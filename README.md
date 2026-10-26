@@ -4,10 +4,12 @@ Yerel müzik arşivleri için Electron tabanlı vibecoded masaüstü oynatıcı.
 
 ## Özellikler
 
-- Yerel kütüphane, albüm görünümleri ve çalma listeleri
+- Yerel kütüphane, albüm görünümleri, Smart Playlist ve çalma listeleri
 - Çift ses kanalıyla boşluksuz oynatma ve crossfade
-- Last.fm destekli Radyo ve YouTube tabanlı uzaktan oynatma
-- İndirme, metadata/kapak görseli düzenleme ve şarkı sözleri
+- Last.fm destekli Radyo, YouTube Music araması ve arama sonucundan Şarkı Radyosu
+- İlerleme ve hata durumlarıyla İndirilenler sayfası, metadata/kapak görseli düzenleme ve şarkı sözleri
+- Spotify hesap verisi ZIP/JSON dosyasından, herkese açık bağlantıdan veya bağlı hesaptan playlist aktarımı
+- MusicBrainz sanatçı/albüm kataloğu ve yerel kütüphane karşılaştırması
 - Dinleme istatistikleri, beğeniler, yedekleme ve geri yükleme
 
 ## Başlatma
@@ -30,6 +32,16 @@ oynatma veya indirme özelliklerini kullanmak için hem **yt-dlp** hem de
 **ffmpeg** kurulu olmalı ve komutları sisteminizin `PATH` değişkeninde
 bulunmalıdır. Araçlardan biri yoksa yalnızca bu isteğe bağlı özellikler
 kullanılamaz; yerel kütüphaneniz çalışmaya devam eder.
+
+## Spotify playlist aktarımı
+
+**Import Playlist** menüsünden Spotify hesap verisi ZIP/JSON dosyası, herkese
+açık playlist bağlantısı veya **Spotify account** seçilebilir. Hesap bağlantısı
+için Spotify Developer uygulamasında `http://127.0.0.1:8888/callback` geri dönüş
+adresi kayıtlı olmalı ve Spotify hesabı uygulamanın izinli kullanıcıları
+arasında bulunmalıdır. Geliştirme modu sınırına takılan kullanıcılar hesap
+verisi dosyasıyla kendi playlistlerini aktarabilir. Eşleşmeler kaydetmeden
+önce incelenebilir; aktarım ses dosyalarını indirmez.
 
 ## Sürümler
 
@@ -57,7 +69,7 @@ yayınlanır; mevcut masaüstü girişi yardımcısı yerel Linux kurulumu için
 ### Yerel Linux paketi oluşturma
 
 ```bash
-npm run package
+npm run package:linux
 npm run linux:install-desktop
 ```
 
@@ -91,10 +103,12 @@ node scripts/package.js --platform=darwin --arch=x64
 
 ## Features
 
-- Local library, album views, and playlists
+- Local library, album views, Smart Playlists, and playlists
 - Gapless playback and crossfade with dual audio channels
-- Last.fm-powered Radio and YouTube-based remote playback
-- Downloads, metadata/artwork editing, and lyrics
+- Last.fm-powered Radio, YouTube Music search, and Song Radio from search results
+- Downloads page with progress and error states, metadata/artwork editing, and lyrics
+- Spotify playlist import from account-data ZIP/JSON, public link, or connected account
+- MusicBrainz artist/album catalog with local library comparison
 - Listening statistics, likes, backups, and restore
 
 ## Start
@@ -116,6 +130,15 @@ Local-library playback does not need extra tools. To use YouTube-based remote
 playback or download features, install both **yt-dlp** and **ffmpeg**, and make
 sure their commands are available on your system `PATH`. If either is missing,
 those optional features are unavailable; your local library remains usable.
+
+## Spotify playlist import
+
+Use **Import Playlist** to select a Spotify account-data ZIP/JSON file, a public
+playlist link, or **Spotify account**. Account connection requires
+`http://127.0.0.1:8888/callback` in the Spotify Developer app's redirect URIs
+and your Spotify account on that app's allowlist. If the development-mode user
+limit prevents sign-in, import your own account-data file instead. Review
+matches before saving; importing does not download audio files.
 
 ## Releases
 
@@ -142,7 +165,7 @@ archive; the existing desktop-entry helper is intended for local Linux use.
 ### Create a local Linux package
 
 ```bash
-npm run package
+npm run package:linux
 npm run linux:install-desktop
 ```
 

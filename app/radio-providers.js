@@ -262,6 +262,39 @@ function createLastfmProvider(client) {
   };
 }
 
+function createSongRadioProvider(client) {
+  function encode(item) {
+    return JSON.stringify([String(item.artist || '').slice(0, 200), String(item.title || '').slice(0, 300), String(item.trackMbid || '').slice(0, 80), String(item.album || '').slice(0, 300), Math.max(0, Number(item.duration) || 0)]);
+  }
+  function decode(value) {
+    try {
+      var row = JSON.parse(value);
+      if (!Array.isArray(row) || !row[0] || !row[1]) return null;
+      var artist = String(row[0]), title = String(row[1]);
+      return { id: 'song-radio:' + artist.toLocaleLowerCase() + '::' + title.toLocaleLowerCase(), providerId: 'lastfm', itemKind: 'candidate', artist: artist, title: title, trackMbid: String(row[2] || ''), album: String(row[3] || ''), duration: Number(row[4]) || 0 };
+    } catch (_) { return null; }
+  }
+  function takeBatch(session) {
+    var pending = Array.isArray(session.remainingItemIds) ? session.remainingItemIds : [];
+    var items = pending.slice(0, RADIO_BATCH_SIZE).map(decode).filter(Boolean);
+    var next = { genreIds: session.genreIds, remainingItemIds: pending.slice(RADIO_BATCH_SIZE), recentItemIds: [] };
+    return { items: items, providerSession: next, exhausted: next.remainingItemIds.length === 0 };
+  }
+  return {
+    id: 'song-radio', label: 'Song Radio',
+    capabilities: { genres: false, continuous: true, playbackKinds: [], producesCandidates: true },
+    async listGenres() { return []; },
+    async startStation(request) {
+      var result = await client.similar(request.seed);
+      if (result.error) throw new Error(result.error);
+      var session = { genreIds: request.genreIds, remainingItemIds: (result.items || []).slice(0, 100).map(encode), recentItemIds: [] };
+      return takeBatch(session);
+    },
+    async nextBatch(session) { return takeBatch(session || { genreIds: [], remainingItemIds: [] }); },
+    async dispose() {},
+  };
+}
+
 function createRadioProviderRegistry(providers) {
   var byId = new Map();
   (providers || []).forEach((provider) => {
@@ -279,6 +312,7 @@ var radioProviderApi = {
   RECENT_ITEM_LIMIT,
   createLocalLibraryProvider,
   createLastfmProvider,
+  createSongRadioProvider,
   createRadioProviderRegistry,
   getGenreLabels,
   normalizeGenreKey,

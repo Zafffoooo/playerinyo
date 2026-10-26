@@ -6,6 +6,7 @@ const {
   RADIO_BATCH_SIZE,
   createLocalLibraryProvider,
   createLastfmProvider,
+  createSongRadioProvider,
   createRadioProviderRegistry,
   getLastfmGenreCatalog,
   normalizeLastfmGenreKey,
@@ -114,6 +115,21 @@ test('provider registry is explicit and rejects duplicate provider IDs', () => {
   assert.equal(registry.get('local-library'), provider);
   assert.deepEqual(registry.list(), [provider]);
   assert.throws(() => createRadioProviderRegistry([provider, provider]), /unique/);
+});
+
+test('song radio yields bounded distinct batches and preserves its continuation', async () => {
+  const candidates = Array.from({ length: 49 }, (_, index) => ({ artist: `Artist ${index}`, title: `Song ${index}`, trackMbid: '', itemKind: 'candidate' }));
+  const provider = createSongRadioProvider({ async similar(seed) { assert.equal(seed.title, 'Seed'); return { items: candidates }; } });
+  const first = await provider.startStation({ genreIds: ['song:abcdefghijk'], seed: { artist: 'Artist', title: 'Seed' } });
+  const restored = JSON.parse(JSON.stringify(first.providerSession));
+  const second = await provider.nextBatch(restored);
+  const third = await provider.nextBatch(second.providerSession);
+  assert.equal(first.items.length, 24);
+  assert.equal(second.items.length, 24);
+  assert.equal(third.items.length, 1);
+  assert.equal(third.exhausted, true);
+  assert.equal(new Set(first.items.concat(second.items, third.items).map(item => item.id)).size, 49);
+  assert.equal(second.items[0].itemKind, 'candidate');
 });
 
 test('Last.fm provider keeps a bounded versioned candidate continuation session', async () => {

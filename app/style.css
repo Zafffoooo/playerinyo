@@ -1680,10 +1680,12 @@ tr.drag-over { border-top: 2px solid var(--accent); }
 .eq-preset-btn.active { background: var(--accent); color: black; border-color: var(--accent); font-weight: 700; }
 
 /* === NOW PLAYING OVERLAY === */
-.np-overlay{position:fixed;inset:38px 0 0 0;z-index:5000;display:flex;flex-direction:column;background:#070707;opacity:0;pointer-events:none;transition:opacity .4s cubic-bezier(.4,0,.2,1);overflow:hidden}
+@property --np-art-color { syntax: '<color>'; inherits: true; initial-value: #252525; }
+@property --np-art-color-secondary { syntax: '<color>'; inherits: true; initial-value: #171717; }
+.np-overlay{position:fixed;inset:38px 0 0 0;z-index:5000;display:flex;flex-direction:column;background:#070707;opacity:0;pointer-events:none;transition:opacity .4s cubic-bezier(.4,0,.2,1),--np-art-color .7s ease,--np-art-color-secondary .7s ease;overflow:hidden}
 .np-overlay.open{opacity:1;pointer-events:all}
-.np-bg-blur{position:absolute;inset:0;background:radial-gradient(ellipse at 35% 40%,var(--np-art-color,#252525),transparent 72%);opacity:.28;pointer-events:none}
-.np-bg-vignette{position:absolute;inset:0;background:radial-gradient(ellipse at 35% 50%,rgba(0,0,0,.1) 0%,rgba(0,0,0,.85) 100%);pointer-events:none}
+.np-bg-blur{position:absolute;inset:0;background:radial-gradient(ellipse at 45% 38%,var(--np-art-color,#252525),transparent 66%),radial-gradient(ellipse at 78% 72%,var(--np-art-color-secondary,#171717),transparent 64%);opacity:.72;pointer-events:none}
+.np-bg-vignette{position:absolute;inset:0;background:radial-gradient(ellipse at 35% 50%,rgba(0,0,0,.04) 0%,rgba(0,0,0,.7) 100%);pointer-events:none}
 .np-topbar{position:relative;z-index:1;display:flex;justify-content:space-between;align-items:center;padding:20px 36px 0;flex-shrink:0}
 .np-top-actions{display:flex;gap:8px;align-items:center}
 .np-panel-toggle{width:36px;height:36px;color:rgba(255,255,255,.6)}
@@ -1756,7 +1758,7 @@ tr.drag-over { border-top: 2px solid var(--accent); }
 #playlist-import-link-fields[hidden]{display:none}
 #playlist-import-link-fields label{font-size:13px;color:var(--text-subdued)}
 #playlist-import-url-status{min-height:20px;margin:0;font-size:12px;color:var(--text-subdued)}
-.np-overlay.np-lyrics-hidden .np-bg-vignette{background:radial-gradient(ellipse at 50% 48%,rgba(0,0,0,.1) 0%,rgba(0,0,0,.85) 100%)}
+.np-overlay.np-lyrics-hidden .np-bg-vignette{background:radial-gradient(ellipse at 50% 48%,rgba(0,0,0,.04) 0%,rgba(0,0,0,.7) 100%)}
 .np-lyrics-header{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.3);margin-bottom:20px;flex-shrink:0}
 .np-queue-content{flex:1;min-height:0;overflow-y:auto;padding-right:4px}
 .np-queue-content .queue-item{border-radius:6px;color:rgba(255,255,255,.82)}
@@ -3609,9 +3611,10 @@ input[type="range"] {
   background: #020203 !important;
 }
 .np-bg-blur {
-  opacity: .24;
-  filter: blur(78px) saturate(1.28) brightness(.62);
+  opacity: .86;
+  filter: blur(48px) saturate(1.15);
 }
+.np-bg-art { position: absolute; inset: -12%; background-size: cover; background-position: center; filter: blur(90px) saturate(1.55) brightness(.8); opacity: .7; pointer-events: none; }
 .np-art-wrap {
   border-radius: 22px;
 }

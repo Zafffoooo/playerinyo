@@ -416,7 +416,7 @@ function applyPathRemap(data, remap, options = {}) {
     : new Map(Object.entries(options.candidateByOldPath || {}));
   const remapValue = createPathRemapper(remap);
 
-  const library = (Array.isArray(source.library) ? source.library : []).map((file) => {
+  let library = (Array.isArray(source.library) ? source.library : []).map((file) => {
     if (!file || !Object.prototype.hasOwnProperty.call(remap, file.filePath)) return file;
     const candidate = candidateByOldPath.get(file.filePath) || {};
     const next = { ...file, ...candidate, filePath: remap[file.filePath] };
@@ -424,6 +424,23 @@ function applyPathRemap(data, remap, options = {}) {
     delete next.id;
     return next;
   });
+  const indexedDestinations = options.indexedDestinationPaths instanceof Set ? options.indexedDestinationPaths : new Set();
+  if (indexedDestinations.size) {
+    const oldPaths = new Set(Object.keys(remap));
+    const destinationByPath = new Map();
+    for (const file of source.library || []) {
+      if (file && !oldPaths.has(file.filePath) && indexedDestinations.has(file.filePath)) destinationByPath.set(file.filePath, file);
+    }
+    library = library.filter((file, index) => {
+      const original = source.library[index];
+      if (!original || !oldPaths.has(original.filePath) || !indexedDestinations.has(file.filePath)) return true;
+      const destination = destinationByPath.get(file.filePath);
+      if (!destination) return true;
+      if (!(Number(destination.trackNo) > 0) && Number(original.trackNo) > 0) destination.trackNo = original.trackNo;
+      warnings.push(`Merged missing library entry into existing file: ${file.filePath}`);
+      return false;
+    });
+  }
 
   const playlists = (Array.isArray(source.playlists) ? source.playlists : []).map((playlist) => ({
     ...playlist,
@@ -441,7 +458,7 @@ function applyPathRemap(data, remap, options = {}) {
   const mappings = source.mappings && typeof source.mappings === 'object' && !Array.isArray(source.mappings)
     ? Object.fromEntries(Object.entries(source.mappings).map(([key, value]) => [key, remapPath(value, remapValue)]))
     : {};
-  const likedSongs = (Array.isArray(source.likedSongs) ? source.likedSongs : []).map((filePath) => remapPath(filePath, remapValue));
+  const likedSongs = Array.from(new Set((Array.isArray(source.likedSongs) ? source.likedSongs : []).map((filePath) => remapPath(filePath, remapValue))));
   const settings = source.settings && typeof source.settings === 'object' && !Array.isArray(source.settings) ? source.settings : {};
 
   if (Array.isArray(settings.savedQueue)) settings.savedQueue = settings.savedQueue.map((filePath) => remapPath(filePath, remapValue));

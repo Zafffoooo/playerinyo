@@ -7,11 +7,12 @@ const { pathToFileURL, fileURLToPath } = require('url');
 const { parse } = require('csv-parse');
 const NodeID3 = require('node-id3');
 const { parseSpotifyAccountFile } = require('./spotify-account-playlists');
+const { createSpotifyAccountClient } = require('./spotify-account-auth');
 const { parseM3u, setLocalRecordExistence, normalizeExportTrack, buildM3u } = require('./playlist-format');
 const { applyPathRemap, buildRelinkProposals, canonicalPath, inferRootReplacements } = require('./moved-file-relink');
 const { createLastfmApiClient, restoreCacheEntries } = require('./lastfm-client');
 const { enrichCanonicalDownloadMetadata, getLastfmTrackInfoParams, stripYoutubeTopicSuffix } = require('./download-canonical-metadata');
-const { buildCandidatePools, selectDiscoveryBatch, flattenPools, getCandidateIdentity, getCandidateAliasIdentity, normalizeGenreKey, normalizeText, hasGenreTag } = require('./lastfm-discovery');
+const { buildCandidatePools, selectDiscoveryBatch, flattenPools, getCandidateIdentity, getCandidateAliasIdentity, normalizeGenreKey, normalizeText, hasGenreTag, candidateFromTrack } = require('./lastfm-discovery');
 const { createKnownTrackIndex, seedFromHistory, indexTrack, hasKnownTrack, beginLastfmSync, ingestLastfmRecentPage, getLastfmRecentTracksRequest, MAX_SERIALIZED_BYTES, serializeKnownTrackIndex } = require('./known-track-index');
 const { createPendingWriteDrainer } = require('./pending-write-drainer');
 const { createLastfmSyncGuard } = require('./lastfm-sync-guard');
@@ -323,7 +324,7 @@ const MAX_LIBRARY_TRACKS = 250000;
 const MAX_PLAYLISTS = 10000;
 const MAX_PLAYLIST_TRACKS = 250000;
 const PLAYLIST_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
-const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm', 'www.google.com']);
+const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm', 'www.google.com', 'musicbrainz.org']);
 const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lastfm.freetls.fastly.net']);
 const APP_ENTRY_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
 const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinyo/releases/latest';
@@ -1784,6 +1785,24 @@ registerIpcHandler('import-playlist', async () => {
   return ['.json', '.zip'].includes(path.extname(filePaths[0]).toLowerCase()) ? parseSpotifyAccountFile(filePaths[0]) : parsePlaylistImportFile(filePaths[0]);
 });
 
+let spotifyAccountClient;
+function getSpotifyAccountClient() {
+  if (!spotifyAccountClient) spotifyAccountClient = createSpotifyAccountClient({
+    userDataPath: app.getPath('userData'), safeStorage, isSecureStorageAvailable,
+    openExternal: url => shell.openExternal(url),
+  });
+  return spotifyAccountClient;
+}
+registerIpcHandler('spotify-account:status', () => getSpotifyAccountClient().status());
+registerIpcHandler('spotify-account:connect', async () => getSpotifyAccountClient().connect());
+registerIpcHandler('spotify-account:cancel-login', () => getSpotifyAccountClient().cancelLogin());
+registerIpcHandler('spotify-account:disconnect', () => getSpotifyAccountClient().disconnect());
+registerIpcHandler('spotify-account:playlists', async () => getSpotifyAccountClient().listPlaylists());
+registerIpcHandler('spotify-account:import', async (event, playlistId, requestId) => getSpotifyAccountClient().importPlaylist(playlistId, requestId, progress => {
+  if (!event.sender.isDestroyed()) event.sender.send('spotify-account:import-progress', progress);
+}));
+registerIpcHandler('spotify-account:cancel-import', (event, requestId) => getSpotifyAccountClient().cancelImport(requestId));
+
 const playlistUrlImportRequests = new Set();
 registerIpcHandler('cancel-playlist-url-import', (event, rawId) => {
   const id = String(rawId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
@@ -1862,6 +1881,78 @@ registerIpcHandler('import-playlist-url', async (event, rawUrl, rawId) => {
     return { ok: true, format: 'url', sourcePath: playlistUrl, name: String(data.title || 'YouTube Music Playlist').slice(0, 200), coverUrl: /^https:\/\//.test(coverUrl) ? coverUrl.slice(0, 4096) : '', records };
   } catch (error) { return { ok: false, error: error.name === 'AbortError' ? 'Playlist request timed out.' : (error.message || 'Playlist import failed.') }; }
   finally { playlistUrlImportRequests.delete(id); cancelledYtdlpDownloads.delete(id); }
+});
+
+const ARTIST_CATALOG_USER_AGENT = `${APP_USER_AGENT} ( zafer@example.com )`;
+let artistCatalogNextRequestAt = 0;
+let artistCatalogRequestTail = Promise.resolve();
+function fetchArtistCatalogJson(url) {
+  const task = artistCatalogRequestTail.catch(() => {}).then(async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const wait = Math.max(0, artistCatalogNextRequestAt - Date.now());
+      if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+      artistCatalogNextRequestAt = Date.now() + 1100;
+      try { return await fetchMetadataJson(url, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } }); }
+      catch (error) {
+        if (attempt === 2 || !/HTTP (429|503)/.test(error.message || '')) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+    }
+  });
+  artistCatalogRequestTail = task.catch(() => {});
+  return task;
+}
+const artistCatalogCache = new Map();
+async function cachedArtistCatalog(key, ttl, fetcher) {
+  const cached = artistCatalogCache.get(key);
+  if (cached && Date.now() - cached.at < ttl) return cached.value;
+  const value = await fetcher();
+  artistCatalogCache.set(key, { at: Date.now(), value });
+  if (artistCatalogCache.size > 100) artistCatalogCache.delete(artistCatalogCache.keys().next().value);
+  return value;
+}
+function validMusicBrainzId(value) { return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value); }
+registerIpcHandler('artist-catalog:search', async (event, rawQuery) => {
+  const query = String(rawQuery || '').trim().slice(0, 120);
+  if (query.length < 2) return { ok: true, artists: [] };
+  try {
+    const data = await cachedArtistCatalog('search:' + query.toLowerCase(), 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/artist/?query=${encodeURIComponent('artist:' + query)}&fmt=json&limit=6`));
+    return { ok: true, artists: (data.artists || []).filter(artist => validMusicBrainzId(artist.id)).map(artist => ({ id: artist.id, name: String(artist.name || '').slice(0, 200), disambiguation: String(artist.disambiguation || '').slice(0, 200), type: String(artist.type || '').slice(0, 40) })) };
+  } catch (error) { return { ok: false, error: error.message || 'Artist search failed.' }; }
+});
+registerIpcHandler('artist-catalog:profile', async (event, artistId) => {
+  if (!validMusicBrainzId(artistId)) return { ok: false, error: 'Invalid artist identity.' };
+  try {
+    const groups = await cachedArtistCatalog('groups:' + artistId, 24 * 60 * 60 * 1000, async () => {
+      const all = [];
+      for (let offset = 0; offset < 500; offset += 100) {
+        const page = await fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release-group?artist=${artistId}&type=album%7Cep&fmt=json&limit=100&offset=${offset}`);
+        all.push(...(page['release-groups'] || []));
+        if (all.length >= Number(page['release-group-count'] || 0) || !(page['release-groups'] || []).length) break;
+      }
+      return all;
+    });
+    let popular = [];
+    try {
+      const data = await cachedArtistCatalog('popular:' + artistId, 6 * 60 * 60 * 1000, () => fetchMetadataJson(`https://api.listenbrainz.org/1/popularity/top-recordings-for-artist/${artistId}?count=10`, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } }));
+      popular = (Array.isArray(data) ? data : []).slice(0, 10).map(row => ({ title: String(row.recording_name || '').slice(0, 300), recordingMbid: String(row.recording_mbid || ''), listens: Number(row.total_listen_count) || 0 })).filter(row => row.title);
+    } catch (_) { /* Popularity is optional; album coverage remains available. */ }
+    return { ok: true, groups: groups.filter(group => validMusicBrainzId(group.id)).map(group => ({ id: group.id, title: String(group.title || '').slice(0, 300), date: String(group['first-release-date'] || '').slice(0, 20), primaryType: String(group['primary-type'] || '') })), popular };
+  } catch (error) { return { ok: false, error: error.message || 'Artist catalog failed.' }; }
+});
+registerIpcHandler('artist-catalog:editions', async (event, groupId) => {
+  if (!validMusicBrainzId(groupId)) return { ok: false, error: 'Invalid album identity.' };
+  try {
+    const data = await cachedArtistCatalog('editions:' + groupId, 24 * 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release?release-group=${groupId}&fmt=json&limit=100`));
+    return { ok: true, editions: (data.releases || []).filter(release => validMusicBrainzId(release.id)).map(release => ({ id: release.id, title: String(release.title || '').slice(0, 300), date: String(release.date || '').slice(0, 20), country: String(release.country || '').slice(0, 20), status: String(release.status || '').slice(0, 30), tracks: (release.media || []).reduce((count, medium) => count + (Number(medium['track-count']) || 0), 0) })) };
+  } catch (error) { return { ok: false, error: error.message || 'Album editions failed.' }; }
+});
+registerIpcHandler('artist-catalog:tracks', async (event, releaseId) => {
+  if (!validMusicBrainzId(releaseId)) return { ok: false, error: 'Invalid edition identity.' };
+  try {
+    const data = await cachedArtistCatalog('tracks:' + releaseId, 24 * 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release/${releaseId}?inc=recordings+artists&fmt=json`));
+    return { ok: true, title: String(data.title || '').slice(0, 300), tracks: (data.media || []).flatMap(medium => (medium.tracks || []).map(track => ({ title: String(track.title || track.recording?.title || '').slice(0, 300), recordingMbid: String(track.recording?.id || ''), duration: Math.round((Number(track.length) || Number(track.recording?.length) || 0) / 1000), disc: Number(medium.position) || 1, number: String(track.number || '').slice(0, 20) }))) };
+  } catch (error) { return { ok: false, error: error.message || 'Track list failed.' }; }
 });
 
 const youtubeMusicSearchCache = new Map();
@@ -1963,7 +2054,7 @@ registerIpcHandler('dialog:openImage', async () => {
 registerIpcHandler('dialog:openAudio', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
-    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'flac', 'm4a'] }]
+    filters: [{ name: 'Audio', extensions: AUDIO_EXTENSIONS.map(extension => extension.slice(1)) }]
   });
   return canceled ? null : filePaths[0];
 });
@@ -4243,7 +4334,7 @@ registerIpcHandler('moved-files:preview', async (event, requestedMissingPaths) =
     sendMovedFileRelinkProgress(event, { phase: 'discovering', label: 'Finding audio files', current: 0, total: 0 });
     await walkDir(searchRoot, AUDIO_EXTENSIONS, rawFiles, failures);
 
-    const existingLibraryPaths = new Set(data.library.map(file => file && file.filePath).filter(Boolean).map(canonicalPath));
+    const existingLibraryByPath = new Map(data.library.filter(file => file && file.filePath).map(file => [canonicalPath(file.filePath), file]));
     const candidates = new Array(rawFiles.length);
     let nextIndex = 0;
     let completed = 0;
@@ -4255,8 +4346,10 @@ registerIpcHandler('moved-files:preview', async (event, requestedMissingPaths) =
         const filePath = rawFiles[index];
         try {
           const fileStat = await fs.promises.lstat(filePath);
-          if (!fileStat.isFile() || fileStat.isSymbolicLink() || existingLibraryPaths.has(canonicalPath(filePath))) continue;
-          candidates[index] = await buildLibraryItemFromAudioFile(filePath, fileStat);
+          if (!fileStat.isFile() || fileStat.isSymbolicLink()) continue;
+          const indexed = existingLibraryByPath.get(canonicalPath(filePath));
+          candidates[index] = indexed && indexed.fileSize === fileStat.size && indexed.modifiedAtMs === fileStat.mtimeMs
+            ? indexed : await buildLibraryItemFromAudioFile(filePath, fileStat);
         } catch (e) {
           if (failures.length < 100) failures.push({ path: filePath, error: e && (e.code || e.message) ? (e.code || e.message) : String(e) });
         } finally {
@@ -4286,6 +4379,7 @@ registerIpcHandler('moved-files:preview', async (event, requestedMissingPaths) =
       return {
         oldPath: proposal.oldPath,
         newPath,
+        alreadyIndexed: !!(newPath && existingLibraryByPath.has(canonicalPath(newPath))),
         candidateId,
         title: proposal.title,
         artist: proposal.artist,
@@ -4372,13 +4466,12 @@ registerIpcHandler('moved-files:commit', async (event, token, selectedCandidateI
     const currentLibraryByPath = new Map(data.library.map(file => [file && file.filePath, file]));
     const selectedDestinations = new Set(selectedRecords.map(record => canonicalPath(record.candidate.filePath)));
     if (selectedDestinations.size !== selectedRecords.length) throw new Error('Each destination can only be linked once.');
+    const indexedDestinationPaths = new Set();
     for (const record of selectedRecords) {
       if (!currentLibraryByPath.has(record.oldPath)) throw new Error('The library changed after preview. Run Scan Missing Files again.');
       if (!(await pathIsCurrentlyMissing(record.oldPath))) throw new Error(`The original path is available again: ${record.oldPath}`);
       const destinationKey = canonicalPath(record.candidate.filePath);
-      if (data.library.some(file => file && canonicalPath(file.filePath) === destinationKey && !selectedOldPaths.has(file.filePath))) {
-        throw new Error(`Destination is already present in the library: ${record.candidate.filePath}`);
-      }
+      if (data.library.some(file => file && canonicalPath(file.filePath) === destinationKey && !selectedOldPaths.has(file.filePath))) indexedDestinationPaths.add(record.candidate.filePath);
     }
 
     const searchRoot = await validateRelinkSearchRoot(preview.searchRoot);
@@ -4410,7 +4503,7 @@ registerIpcHandler('moved-files:commit', async (event, token, selectedCandidateI
       libraryPaths: data.library.map(file => file && file.filePath).filter(Boolean),
       missingPaths: preview.missingPaths,
     });
-    const next = applyPathRemap(data, remap, { candidateByOldPath, rootReplacements });
+    const next = applyPathRemap(data, remap, { candidateByOldPath, rootReplacements, indexedDestinationPaths });
     warnings.push(...next.warnings);
     validateBackupLibrary(next.library);
     validateBackupPlaylists(next.playlists);
@@ -5385,6 +5478,23 @@ registerIpcHandler('lastfm-discovery-next', async (event, providerSession, optio
 
 registerIpcHandler('lastfm-discovery-similarity', async (event, seed, genreId) => {
   return { candidateIds: await getLastfmSimilarityCandidateIds(seed, genreId) };
+});
+
+registerIpcHandler('song-radio:similar', async (event, seed) => {
+  const artist = String(seed && seed.artist || '').trim().slice(0, 200);
+  const title = String(seed && seed.title || '').trim().slice(0, 300);
+  if (!artist || !title) return { items: [], error: 'A song and artist are required.' };
+  try {
+    const data = await lastfmApiClient.request('track.getsimilar', { artist, track: title, limit: 100, autocorrect: 1 });
+    const seen = new Set([normalizeText(artist) + '::' + normalizeText(title)]);
+    const items = getLastfmSimilarTracks(data).map((row, index) => candidateFromTrack(row, { rank: index + 1, source: 'similar-track', tier: 'discovery' })).filter((candidate) => {
+      if (!candidate) return false;
+      const key = normalizeText(candidate.artist) + '::' + normalizeText(candidate.title);
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    });
+    return { items: items.slice(0, 100) };
+  } catch (error) { return { items: [], error: error.message || 'Similar songs are unavailable.' }; }
 });
 
 registerIpcHandler('lastfm-known-track-status', async () => {

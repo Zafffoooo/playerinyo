@@ -15,12 +15,19 @@ function initSearchSourcePicker() {
       sourceList.style.left = Math.max(8, Math.min(bounds.left, window.innerWidth - sourceList.offsetWidth - 8)) + 'px';
       sourceList.style.top = (bounds.bottom + 5) + 'px';
     }
-    function chooseSource(option) {
+    function syncSourceButton() {
+      var selected = sourceOptions.find(function (option) { return option.dataset.source === searchSource.value; });
+      if (!selected) return;
+      sourceButton.firstChild.textContent = selected.textContent + ' ';
+      sourceOptions.forEach(function (item) { item.setAttribute('aria-selected', item === selected ? 'true' : 'false'); });
+    }
+    function chooseSource(option, focusSearch) {
       searchSource.value = option.dataset.source;
-      sourceButton.firstChild.textContent = option.textContent + ' ';
-      sourceOptions.forEach(function (item) { item.setAttribute('aria-selected', item === option ? 'true' : 'false'); });
+      syncSourceButton();
       searchSource.dispatchEvent(new Event('change'));
-      closeSourceList(); sourceButton.focus();
+      closeSourceList();
+      var input = $('global-search');
+      if (focusSearch && input) input.focus(); else sourceButton.focus();
     }
     sourceButton.addEventListener('click', function () {
       if (!sourceList.hidden) { closeSourceList(); return; }
@@ -37,7 +44,17 @@ function initSearchSourcePicker() {
       var current = sourceOptions.indexOf(document.activeElement);
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); sourceOptions[(current + (event.key === 'ArrowDown' ? 1 : sourceOptions.length - 1)) % sourceOptions.length].focus(); }
     });
-    sourceOptions.forEach(function (option) { option.addEventListener('click', function () { chooseSource(option); }); });
+    sourceOptions.forEach(function (option) { option.addEventListener('click', function () { chooseSource(option, false); }); });
+    searchSource.addEventListener('change', syncSourceButton);
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || modalStack.length) return;
+      var editable = event.target && event.target.closest && event.target.closest('input,textarea,select,[contenteditable="true"]');
+      if (editable && editable.id !== 'global-search') return;
+      var next = sourceOptions.find(function (option) { return option.dataset.source !== searchSource.value; });
+      if (!next) return;
+      event.preventDefault(); event.stopPropagation();
+      chooseSource(next, true);
+    }, true);
     document.addEventListener('pointerdown', function (event) { if (!sourcePicker.contains(event.target) && !sourceList.contains(event.target)) closeSourceList(); });
     document.addEventListener('focusin', function (event) { if (!sourcePicker.contains(event.target) && !sourceList.contains(event.target)) closeSourceList(); });
     window.addEventListener('resize', function () { if (!sourceList.hidden) positionSourceList(); });
@@ -90,6 +107,13 @@ async function showPlaylistImportReview(importResult, reimportTarget) {
   }
   if (!groups.length) return;
   if (importResult && importResult.coverUrl && groups.length === 1) groups[0].cover = importResult.coverUrl;
+  var coverPreview = $('playlist-import-cover-preview');
+  if (coverPreview) {
+    var coverUrl = groups.length === 1 && typeof groups[0].cover === 'string' && /^https:\/\//i.test(groups[0].cover) ? groups[0].cover : '';
+    coverPreview.hidden = !coverUrl;
+    if (coverUrl) coverPreview.src = coverUrl;
+    else coverPreview.removeAttribute('src');
+  }
   groups.forEach(function (group) { group.tracks.forEach(function (row) {
     if (isM3uImportRecord(row)) row.__addLocalSelected = false;
     else row.__downloadSelected = !reimportTarget || row.__importDiff === 'new';

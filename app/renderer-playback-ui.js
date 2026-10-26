@@ -469,6 +469,7 @@ function startNPSlideshow() {
         setTimeout(function () {
           if (!npOverlayOpen || slideshowGeneration !== playbackGeneration || state.currentPlayingTrack !== slideshowTrack) return;
           artEl.src = img;
+          updateNPArtworkGradient(img, artEl);
           artEl.style.display = 'block';
           artEl.style.opacity = '1';
           var placeholder = document.getElementById('np-art-placeholder');
@@ -1728,7 +1729,7 @@ function initPlaybackControls() {
     if (e.code === 'Escape' && selectedTrackKeys.size) { e.preventDefault(); clearTrackSelection(); }
     // Insert key → Rescan Folder (add only NEW songs from imported folders)
     if (e.code === 'Insert') { e.preventDefault(); if (!e.repeat) doRescanFolder(); }
-  });
+  }, true);
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && npOverlayOpen) { e.preventDefault(); closeNowPlayingOverlay(); return; }
     if (e.key === 'Tab' && npOverlayOpen && !modalStack.length) {
@@ -1780,6 +1781,8 @@ function bootstrap() {
   initLibraryControls();
   initPlaybackDownloadControls();
   initDownloadControls();
+  initSpotifyAccountControls();
+  initArtistProfileControls();
   initImportReviewControls();
   initLyricsControls();
   initAudioOutputControls();

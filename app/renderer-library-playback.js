@@ -197,6 +197,9 @@ function renderCurrentCollectionState() {
   else if (state.currentView === 'home') renderHomeDashboard();
   else if (state.currentView === 'playlists') switchView('playlists', false);
   else if (state.currentView === 'stats') renderStatsView();
+  else if (state.currentView === 'downloads') renderDownloadQueue();
+  else if (state.currentView && state.currentView.indexOf('artist:') === 0) renderArtistProfileById(state.currentView.slice(7));
+  else if (state.currentView && state.currentView.indexOf('artist-album:') === 0) renderArtistAlbumPage(state.currentView.slice(13));
   else if (state.currentView === 'search') { var search = $('global-search'); if (search) search.dispatchEvent(new Event('input')); }
   else if (state.currentView && state.currentView.indexOf('album:') === 0) {
     var album = getFullAlbumByKey(decodeURIComponent(state.currentView.slice(6)));
@@ -625,7 +628,7 @@ function configurePlaylistSortControl(value, direction, onSelect, onDirection) {
   playlistSortSelectHandler = onSelect;
   playlistSortDirectionHandler = onDirection;
   var valueEl = $('playlist-sort-value');
-  if (valueEl) valueEl.textContent = playlistSortValue;
+  if (valueEl) valueEl.textContent = playlistSortValue === 'Recently Added' && state.currentView === 'liked_songs' ? 'Recently Liked' : playlistSortValue;
   getPlaylistSortOptions().forEach(function (option) { option.setAttribute('aria-selected', option.dataset.value === playlistSortValue ? 'true' : 'false'); });
   var directionButton = $('playlist-sort-dir-btn');
   if (directionButton) {
@@ -920,6 +923,7 @@ function renderPlaylist(playlistId) {
     $('playlist-track-search').value = '';
     clearTrackTableFilter();
     var likedSortBy = appSettings.likedSongsSortBy || 'Recently Added';
+    var recentOption = $('playlist-sort-option-recent'); if (recentOption) recentOption.textContent = 'Recently Liked';
     var likedDirection = appSettings.likedSongsSortAscending === true ? 'asc' : 'desc';
     configurePlaylistSortControl(likedSortBy, likedDirection, async function (nextSort) {
       var previousSort = appSettings.likedSongsSortBy;
@@ -936,18 +940,18 @@ function renderPlaylist(playlistId) {
     });
     var byPath = getLibraryIndex().byStrippedPath;
     var likedFiles = state.likedSongs.map(function (record) {
-      if (typeof record === 'string') return byPath.get(stripFileUrl(record));
+      if (typeof record === 'string') { var localFile = byPath.get(stripFileUrl(record)); return localFile ? { file: localFile, record: record } : null; }
       if (!record || typeof record !== 'object') return null;
       var local = state.musicFiles.find(function (file) { return likedIdentity(file) === record.identity; });
-      return local || { __remoteLiked: true, title: record.title, artist: record.artist, album: record.album, duration: record.duration, trackMbid: record.trackMbid, playback: { kind: 'youtube', videoId: record.videoId }, artwork: record.artwork, dateAdded: record.dateAdded };
+      return { file: local || { __remoteLiked: true, title: record.title, artist: record.artist, album: record.album, duration: record.duration, trackMbid: record.trackMbid, playback: { kind: 'youtube', videoId: record.videoId }, artwork: record.artwork, dateAdded: record.dateAdded }, record: record };
     }).filter(Boolean);
     var sortBy = likedSortBy;
     var dir = likedDirection === 'asc' ? 1 : -1;
-    if (sortBy === 'Title') likedFiles.sort(function (a, b) { return (a.title || '').localeCompare(b.title || '') * dir; });
-    else if (sortBy === 'Artist') likedFiles.sort(function (a, b) { return (a.artist || '').localeCompare(b.artist || '') * dir; });
-    else if (sortBy === 'Album') likedFiles.sort(function (a, b) { return (a.album || '').localeCompare(b.album || '') * dir; });
-    else if (sortBy === 'Recently Added') likedFiles = sortRecentlyAddedEntries(likedFiles, function (file) { return Number(file.addedAtMs) || 0; }, likedDirection);
-    state.currentTracks = likedFiles.map(function (f) { return f.__remoteLiked ? { title: f.title, artist: f.artist, album: f.album, duration: f.duration, trackMbid: f.trackMbid, playback: f.playback, artwork: f.artwork, isDisabled: false, sourcePlaylistId: 'liked_songs' } : { matchedFile: f, title: f.title, artist: f.artist, album: f.album, duration: f.duration, isDisabled: false, sourcePlaylistId: 'liked_songs' }; });
+    if (sortBy === 'Title') likedFiles.sort(function (a, b) { return (a.file.title || '').localeCompare(b.file.title || '') * dir; });
+    else if (sortBy === 'Artist') likedFiles.sort(function (a, b) { return (a.file.artist || '').localeCompare(b.file.artist || '') * dir; });
+    else if (sortBy === 'Album') likedFiles.sort(function (a, b) { return (a.file.album || '').localeCompare(b.file.album || '') * dir; });
+    else if (sortBy === 'Recently Added') likedFiles = sortRecentlyAddedEntries(likedFiles, function (entry) { return likedAtMs(entry.record); }, likedDirection);
+    state.currentTracks = likedFiles.map(function (entry) { var f = entry.file; return f.__remoteLiked ? { title: f.title, artist: f.artist, album: f.album, duration: f.duration, trackMbid: f.trackMbid, playback: f.playback, artwork: f.artwork, isDisabled: false, sourcePlaylistId: 'liked_songs' } : { matchedFile: f, title: f.title, artist: f.artist, album: f.album, duration: f.duration, isDisabled: false, sourcePlaylistId: 'liked_songs' }; });
     renderTracksTable(false); return;
   }
   var pl = state.playlists.find(function (p) { return p.id === playlistId; }); if (!pl) return;
@@ -961,6 +965,7 @@ function renderPlaylist(playlistId) {
   $('playlist-track-search').value = ''; // clear search when opening a new playlist
   clearTrackTableFilter();
   var playlistSortBy = pl.sortBy || 'Custom Order';
+  var normalRecentOption = $('playlist-sort-option-recent'); if (normalRecentOption) normalRecentOption.textContent = 'Recently Added';
   var playlistSortDirection = pl.sortDirection === 'desc' || pl.sortDirection === 'asc'
     ? pl.sortDirection
     : (playlistSortBy === 'Recently Added' ? 'desc' : (appSettings.sortAscending === false ? 'desc' : 'asc'));
@@ -1102,17 +1107,13 @@ function openTrackContextMenu(track, x, y, opener) {
   positionContextMenu($('track-context-menu'), x, y, opener);
 }
 
-function toggleTrackLike(filePath, controlEl) {
-  if (!filePath) return;
-  var file = getLibraryIndex().byPath.get(filePath) || getLibraryIndex().byStrippedPath.get(stripFileUrl(filePath));
-  if (!file || !toggleTrackLikeByIdentity({ matchedFile: file, title: file.title, artist: file.artist, trackMbid: file.trackMbid || file.recordingMbid })) return;
-  var liked = isTrackLiked({ matchedFile: file, title: file.title, artist: file.artist, trackMbid: file.trackMbid || file.recordingMbid });
-  if (controlEl) {
-    var iconEl = controlEl.matches && controlEl.matches('button') ? controlEl.querySelector('i') : controlEl;
-    if (iconEl) iconEl.className = liked ? 'ph-fill ph-heart' : 'ph ph-heart';
-    if (controlEl.matches && controlEl.matches('button')) { controlEl.setAttribute('aria-pressed', liked ? 'true' : 'false'); controlEl.setAttribute('aria-label', liked ? 'Unlike track' : 'Like track'); }
-  }
-  if (state.currentPlayingTrack && state.currentPlayingTrack.matchedFile && state.currentPlayingTrack.matchedFile.filePath === filePath) updatePlayerUI();
+function toggleTableTrackLike(track, controlEl) {
+  if (!track || !toggleTrackLikeByIdentity(track)) return;
+  var liked = isTrackLiked(track);
+  var icon = controlEl && controlEl.querySelector('i');
+  if (icon) icon.className = liked ? 'ph-fill ph-heart' : 'ph ph-heart';
+  if (controlEl) { controlEl.setAttribute('aria-pressed', String(liked)); controlEl.setAttribute('aria-label', liked ? 'Unlike track' : 'Like track'); }
+  if (state.currentPlayingTrack && likedIdentity(state.currentPlayingTrack) === likedIdentity(track)) updatePlayerUI();
   if (state.currentView === 'liked_songs') renderPlaylist('liked_songs');
 }
 
@@ -1144,7 +1145,7 @@ function handleTrackTableClick(e) {
     e.stopPropagation();
     likeBtn.style.transform = 'scale(1.3)';
     setTimeout(function () { likeBtn.style.transform = ''; }, 200);
-    toggleTrackLike(likeBtn.dataset.fp, likeBtn);
+    toggleTableTrackLike(getTrackFromTableRow(likeRow), likeBtn);
     return;
   }
 
@@ -1203,6 +1204,7 @@ function handleTrackTableContextMenu(e) {
 }
 
 function handleTrackTableKeyDown(e) {
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey) return;
   if (e.target && e.target.closest && e.target.closest('button, input, [contenteditable="true"]')) return;
   var row = getTrackRowFromEventTarget(e.target);
   var track = getTrackFromTableRow(row);
@@ -1336,7 +1338,7 @@ function appendVirtualTrackTableRow(fragment, entry) {
   var trackArtwork = track.matchedFile && track.matchedFile.picture ? track.matchedFile.picture : getTrackArtworkUrl(track);
   var pic = trackArtwork ? '<img src="' + esc(trackArtwork) + '" alt="Artwork for ' + esc(track.album || track.title || 'track') + '"' + lazy + ' class="track-img" />' : '<div class="track-img" aria-hidden="true" style="display:flex;align-items:center;justify-content:center;"><i class="ph ph-music-notes" style="color:var(--text-subdued);"></i></div>';
   var fp = track.matchedFile ? track.matchedFile.filePath : '';
-  var liked = fp ? isTrackLiked(track) : false;
+  var liked = isTrackLiked(track);
   var inPlaylists = getTrackPlaylistMembership(track);
   var streamOnly = !track.matchedFile && isRemotePlaybackTrack(track);
   var streamIndicator = streamOnly ? '<span class="track-stream-indicator" role="img" aria-label="Streamed from Radio — not downloaded" title="Streamed from Radio — not downloaded"><i class="ph ph-broadcast" aria-hidden="true"></i></span>' : '';
@@ -1457,7 +1459,7 @@ function renderTracksTable(allowReorder) {
         var trackArtwork = track.matchedFile && track.matchedFile.picture ? track.matchedFile.picture : getTrackArtworkUrl(track);
         var pic = trackArtwork ? '<img src="' + esc(trackArtwork) + '" alt="Artwork for ' + esc(track.album || track.title || 'track') + '"' + lazy + ' class="track-img" />' : '<div class="track-img" aria-hidden="true" style="display:flex;align-items:center;justify-content:center;"><i class="ph ph-music-notes" style="color:var(--text-subdued);"></i></div>';
         var fp = track.matchedFile ? track.matchedFile.filePath : '';
-        var liked = fp ? isTrackLiked(track) : false;
+        var liked = isTrackLiked(track);
         var inPlaylists = getTrackPlaylistMembership(track);
         var streamOnly = !track.matchedFile && isRemotePlaybackTrack(track);
         var streamIndicator = streamOnly ? '<span class="track-stream-indicator" role="img" aria-label="Streamed from Radio — not downloaded" title="Streamed from Radio — not downloaded"><i class="ph ph-broadcast" aria-hidden="true"></i></span>' : '';

@@ -434,6 +434,7 @@ function sanitizeImportedSettings(settings) {
     Object.entries(settings.likedAlbums).slice(0, 100000).forEach(([key, value]) => { if (key && key.length <= 2000 && value === true) likedAlbums[key] = true; });
     next.likedAlbums = likedAlbums;
   }
+  if (Object.prototype.hasOwnProperty.call(settings, 'likedSongDates')) next.likedSongDates = sanitizeStringMap(settings.likedSongDates, 'likedSongDates', MAX_LIBRARY_TRACKS, 5000, 40);
   if (Object.prototype.hasOwnProperty.call(settings, 'customLyrics')) next.customLyrics = sanitizeStringMap(settings.customLyrics, 'customLyrics', 100000, 100000, 2000);
   if (Object.prototype.hasOwnProperty.call(settings, 'lastfmRecommendationPrefs')) {
     const prefs = settings.lastfmRecommendationPrefs;

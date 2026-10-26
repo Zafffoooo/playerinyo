@@ -152,6 +152,23 @@ test('path remap preserves file URL representation', () => {
   assert.equal(result.playlists[0].tracks[0].FilePath, pathToFileURL(newPath).href);
 });
 
+test('an already indexed destination merges the missing library entry without collapsing playlist occurrences', () => {
+  const oldPath = "/music/Black Bile/L'Oratoire/02 - Bereavement.opus";
+  const newPath = '/music/Black Bile/L’Oratoire/02 - Bereavement.opus';
+  const result = applyPathRemap({
+    library: [track(oldPath, { trackNo: 2, duration: 0 }), track(newPath, { trackNo: 0, duration: 563 })],
+    playlists: [{ id: 'p', tracks: [{ FilePath: oldPath }, { FilePath: oldPath }] }],
+    mappings: { one: oldPath }, likedSongs: [oldPath, newPath], settings: {},
+  }, { [oldPath]: newPath }, { indexedDestinationPaths: new Set([newPath]) });
+  assert.equal(result.library.length, 1);
+  assert.equal(result.library[0].filePath, newPath);
+  assert.equal(result.library[0].duration, 563);
+  assert.equal(result.library[0].trackNo, 2);
+  assert.deepEqual(result.playlists[0].tracks.map(row => row.FilePath), [newPath, newPath]);
+  assert.equal(result.mappings.one, newPath);
+  assert.deepEqual(result.likedSongs, [newPath]);
+});
+
 test('duplicate filenames are always review-only', () => {
   const missing = track('/lost/Signal.flac');
   const proposals = buildRelinkProposals([missing], [

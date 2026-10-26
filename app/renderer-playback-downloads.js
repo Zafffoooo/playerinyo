@@ -559,18 +559,33 @@ function likedRecordMatches(record, track) {
   return !!(record && typeof record === 'object' && record.identity && record.identity === likedIdentity(track));
 }
 function isTrackLiked(track) { return state.likedSongs.some(function (record) { return likedRecordMatches(record, track); }); }
+function likedDateKey(record) { return typeof record === 'string' ? 'path:' + record : record && record.identity ? 'identity:' + record.identity : ''; }
+function likedAtMs(record) {
+  var key = likedDateKey(record);
+  var saved = key && appSettings.likedSongDates && appSettings.likedSongDates[key];
+  var value = saved || (record && typeof record === 'object' && record.dateAdded);
+  var time = Date.parse(value || '');
+  return Number.isFinite(time) ? time : 0;
+}
 function makeRemoteLikedRecord(track) {
   return { version: 1, identity: likedIdentity(track), title: String(track.title || '').slice(0, 2000), artist: String(track.artist || '').slice(0, 2000), album: String(track.album || '').slice(0, 2000), duration: Math.max(0, Number(track.duration) || 0), trackMbid: String(track.trackMbid || track.recordingMbid || '').slice(0, 80), videoId: String(track.playback && track.playback.videoId || '').slice(0, 11), playbackSource: 'youtube', artwork: typeof track.artwork === 'string' ? track.artwork.slice(0, 4096) : '', dateAdded: new Date().toISOString() };
 }
 function toggleTrackLikeByIdentity(track) {
   if (!track || !likedIdentity(track)) return false;
   var index = state.likedSongs.findIndex(function (record) { return likedRecordMatches(record, track); });
-  if (index !== -1) state.likedSongs.splice(index, 1);
-  else if (track.matchedFile) state.likedSongs.push(track.matchedFile.filePath);
-  else if (isRemotePlaybackTrack(track)) state.likedSongs.push(makeRemoteLikedRecord(track));
+  if (index !== -1) {
+    var removed = state.likedSongs.splice(index, 1)[0];
+    if (appSettings.likedSongDates) delete appSettings.likedSongDates[likedDateKey(removed)];
+  } else if (track.matchedFile || isRemotePlaybackTrack(track)) {
+    var record = track.matchedFile ? track.matchedFile.filePath : makeRemoteLikedRecord(track);
+    state.likedSongs.push(record);
+    if (!appSettings.likedSongDates || typeof appSettings.likedSongDates !== 'object') appSettings.likedSongDates = {};
+    appSettings.likedSongDates[likedDateKey(record)] = new Date().toISOString();
+  }
   else return false;
   trackRenderState.likedSongsSet = new Set(state.likedSongs.filter(function (item) { return typeof item === 'string'; }));
   persistInBackground(persistLikedSongs(state.likedSongs));
+  saveSettingsDebounced(150);
   return true;
 }
 
@@ -1283,7 +1298,7 @@ function isLocalPlaylistImportCandidate(row) {
   return !!(isM3uImportRecord(row) && row.SourceStatus === 'local-existing' && !findExactPlaylistPathMatch(row));
 }
 function isPlaylistImportDownloadEligible(row) {
-  return !!(row && row.__importDiff !== 'removed' && row.SourceFormat !== 'url' && !isM3uImportRecord(row) && isPlaylistRecordMissing(row));
+  return !!(row && row.SourceStatus !== 'unavailable' && row.__importDiff !== 'removed' && row.SourceFormat !== 'url' && !isM3uImportRecord(row) && isPlaylistRecordMissing(row));
 }
 function buildPlaylistImportGroups(sourcePath, data, sourceName) {
   if (!Array.isArray(data) || !data.length) return [];
@@ -1547,6 +1562,7 @@ function serializeDownloadQueueJob(job) {
     playlistIds: Array.isArray(job.playlistIds) ? job.playlistIds.slice() : [],
     savePlaylists: !!job.savePlaylists,
     title: job.title || 'Downloads',
+    coverUrl: job.coverUrl || '',
     status: job.status || 'queued',
     statusLabel: job.statusLabel || '',
     current: Number(job.current || 0),
@@ -1662,6 +1678,7 @@ function hydrateDownloadQueueJob(data) {
     playlistIds: Array.isArray(data.playlistIds) ? data.playlistIds.slice() : (data.playlistId ? [data.playlistId] : []),
     savePlaylists: !!data.savePlaylists,
     title: data.title || 'Downloads',
+    coverUrl: typeof data.coverUrl === 'string' && /^https:\/\//i.test(data.coverUrl) ? data.coverUrl.slice(0, 4096) : '',
     status: interrupted ? 'failed' : originalStatus,
     statusLabel: interrupted ? 'Interrupted by app restart' : (data.statusLabel || originalStatus || 'queued'),
     current: Number(data.current || 0),

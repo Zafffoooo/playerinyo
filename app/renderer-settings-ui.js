@@ -65,6 +65,7 @@ var SHORTCUTS_HELP = [
   ]},
   { section: 'Library', items: [
     ['Ctrl + F', 'Focus search'],
+    ['Shift + Enter', 'Switch Library / YouTube Music search'],
     ['Ctrl + Z', 'Undo last action'],
     ['Insert', 'Rescan folders for new songs'],
     ['Ctrl + Mouse Wheel', 'Zoom album grid'],
@@ -131,7 +132,6 @@ var downloadAlbumStart = null;
 
 var downloadSearchForm = null;
 
-var btnDownloadQueueClose = null;
 
 
 var btnDownloadQueueClear = null;
@@ -679,21 +679,44 @@ function updateNPArtworkGradient(pic, artEl) {
   if (!overlay || pic === npGradientSource) return;
   npGradientSource = pic || '';
   overlay.style.setProperty('--np-art-color', '#252525');
+  overlay.style.setProperty('--np-art-color-secondary', '#171717');
   if (!pic || !artEl) return;
+  var generation = playbackGeneration;
   function sample() {
-    if (npGradientSource !== pic || !artEl.naturalWidth) return;
+    if (npGradientSource !== pic || generation !== playbackGeneration || !artEl.naturalWidth) return;
     try {
       var canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 12;
+      canvas.width = canvas.height = 20;
       var ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(artEl, 0, 0, 12, 12);
-      var data = ctx.getImageData(0, 0, 12, 12).data;
-      var r = 0, g = 0, b = 0, count = 0;
+      ctx.drawImage(artEl, 0, 0, 20, 20);
+      var data = ctx.getImageData(0, 0, 20, 20).data;
+      var buckets = new Map();
       for (var i = 0; i < data.length; i += 4) {
         if (data[i + 3] < 128) continue;
-        r += data[i]; g += data[i + 1]; b += data[i + 2]; count++;
+        var r = data[i], g = data[i + 1], b = data[i + 2];
+        var light = (r + g + b) / 3;
+        if (light < 18 || light > 238) continue;
+        var key = [r >> 5, g >> 5, b >> 5].join(':');
+        var bucket = buckets.get(key) || { r: 0, g: 0, b: 0, count: 0 };
+        bucket.r += r; bucket.g += g; bucket.b += b; bucket.count++;
+        buckets.set(key, bucket);
       }
-      if (count) overlay.style.setProperty('--np-art-color', 'rgb(' + Math.round(r / count) + ',' + Math.round(g / count) + ',' + Math.round(b / count) + ')');
+      var colors = Array.from(buckets.values()).map(function (bucket) {
+        var rgb = [bucket.r / bucket.count, bucket.g / bucket.count, bucket.b / bucket.count];
+        var saturation = Math.max.apply(null, rgb) - Math.min.apply(null, rgb);
+        return { rgb: rgb, score: bucket.count * (1 + saturation / 255) };
+      }).sort(function (a, b) { return b.score - a.score; });
+      if (!colors.length) return;
+      var primary = colors[0];
+      var secondary = colors.find(function (entry) {
+        return entry !== primary && entry.rgb.reduce(function (sum, channel, index) { return sum + Math.abs(channel - primary.rgb[index]); }, 0) > 90;
+      }) || colors[1] || primary;
+      function softColor(entry) {
+        return 'rgb(' + entry.rgb.map(function (value) { return Math.round(Math.max(24, Math.min(175, value * .88))); }).join(',') + ')';
+      }
+      if (npGradientSource !== pic || generation !== playbackGeneration) return;
+      overlay.style.setProperty('--np-art-color', softColor(primary));
+      overlay.style.setProperty('--np-art-color-secondary', softColor(secondary));
     } catch (_) { /* Cross-origin artwork keeps the neutral surface. */ }
   }
   if (artEl.complete) sample(); else artEl.addEventListener('load', sample, { once: true });
@@ -703,6 +726,7 @@ function updateNowPlayingOverlay() {
   var artEl = document.getElementById('np-art');
   var placeholder = document.getElementById('np-art-placeholder');
   var bgBlur = document.getElementById('np-bg-blur');
+  var bgArt = document.getElementById('np-bg-art');
   var titleEl = document.getElementById('np-track-title');
   var artistEl = document.getElementById('np-track-artist');
   var albumEl = document.getElementById('np-track-album');
@@ -728,6 +752,7 @@ function updateNowPlayingOverlay() {
     }
     if (placeholder) placeholder.style.display = pic && artEl && artEl.complete && artEl.naturalWidth ? 'none' : 'flex';
     if (bgBlur) bgBlur.style.backgroundImage = '';
+    if (bgArt) bgArt.style.backgroundImage = pic ? 'url(' + JSON.stringify(pic) + ')' : '';
     updateNPArtworkGradient(pic, artEl);
     if (titleEl) titleEl.textContent = track.title || '';
     if (artistEl) artistEl.textContent = track.artist || '';
@@ -740,6 +765,7 @@ function updateNowPlayingOverlay() {
     if (artEl) { artEl.removeAttribute('src'); artEl.alt = ''; artEl.style.display = 'none'; }
     if (placeholder) placeholder.style.display = 'flex';
     if (bgBlur) bgBlur.style.backgroundImage = '';
+    if (bgArt) bgArt.style.backgroundImage = '';
     if (titleEl) titleEl.textContent = 'No track';
     if (artistEl) artistEl.textContent = String.fromCharCode(8212);
     if (albumEl) albumEl.textContent = '';
@@ -1197,9 +1223,7 @@ function initSettingsControls() {
   });
   btnDownloadQueue = $('btn-download-queue');
   if (btnDownloadQueue) {
-    btnDownloadQueue.setAttribute('aria-expanded', 'false');
-    btnDownloadQueue.setAttribute('aria-controls', 'download-queue-panel');
-    btnDownloadQueue.addEventListener('click', function (e) { e.stopPropagation(); setDownloadQueuePanel(!downloadQueuePanelOpen); });
+    btnDownloadQueue.addEventListener('click', function (e) { e.stopPropagation(); setDownloadQueuePanel(true); });
   }
   downloadSearchToggle = $('download-search-toggle');
   if (downloadSearchToggle) downloadSearchToggle.addEventListener('click', function () {
@@ -1210,12 +1234,12 @@ function initSettingsControls() {
   if (downloadAlbumStart) downloadAlbumStart.addEventListener('click', function () { openAlbumDownloadSearch(); });
   downloadSearchForm = $('download-search-form');
   if (downloadSearchForm) downloadSearchForm.addEventListener('submit', function (e) { e.preventDefault(); searchDirectDownload(); });
-  btnDownloadQueueClose = $('download-queue-close');
-  if (btnDownloadQueueClose) btnDownloadQueueClose.addEventListener('click', function () { setDownloadQueuePanel(false); });
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape' || !downloadQueuePanelOpen || modalStack.length) return;
-    e.preventDefault();
-    setDownloadQueuePanel(false);
+  document.querySelectorAll('[data-download-filter]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      downloadQueueFilter = button.dataset.downloadFilter;
+      document.querySelectorAll('[data-download-filter]').forEach(function (option) { option.setAttribute('aria-pressed', option === button ? 'true' : 'false'); });
+      renderDownloadQueue();
+    });
   });
   btnDownloadQueueClear = $('download-queue-clear');
   if (btnDownloadQueueClear) btnDownloadQueueClear.addEventListener('click', function () {
@@ -1225,7 +1249,6 @@ function initSettingsControls() {
     renderDownloadQueue();
   });
   window.addEventListener('resize', function () {
-    if (downloadQueuePanelOpen) requestAnimationFrame(positionDownloadQueuePanel);
     var sortListbox = $('playlist-sort-listbox');
     if (sortListbox && !sortListbox.hidden) requestAnimationFrame(positionPlaylistSortListbox);
     var librarySortListbox = $('library-sort-listbox');

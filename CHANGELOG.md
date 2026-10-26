@@ -2,6 +2,26 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.7 — 2026-10-26
+
+### Added
+
+- Connect a permitted Spotify account to browse and import its playlists, including playlist covers.
+- Browse artist albums and editions in the MusicBrainz catalog, compare tracks with the local library, and open or download an album.
+- Continue a YouTube Music search result with Song Radio recommendations in Up Next; return to the previous queue when wanted.
+- Show artist profiles for the first two distinct artists in YouTube Music song results.
+- Show download history, artwork, per-track progress, and the current download in a dedicated Downloads page and compact sidebar indicator.
+
+### Changed
+
+- Refined the Now Playing artwork gradient, artist album layout, and download page layout.
+- Sort Liked Songs by the time a track was liked.
+
+### Fixed
+
+- Show and toggle the liked state of streamed and radio tracks in track lists.
+- Merge duplicate library paths when relinking moved files and retain liked-track references.
+
 ## 0.1.6 — 2026-10-25
 
 ### Added
