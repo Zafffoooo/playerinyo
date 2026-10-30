@@ -371,6 +371,7 @@
               </div>
             </div>
 
+            <div id="playlist-status-filters" hidden></div>
             <table class="tracks-table">
               <thead>
                 <tr>
@@ -1166,6 +1167,23 @@
       <div style="display:flex;gap:12px;">
         <button class="btn btn-outline" id="cp-cancel-btn" style="flex:1;justify-content:center;">Cancel</button>
         <button class="btn btn-primary" id="cp-create-btn" style="flex:1;justify-content:center;">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlist-cover-crop-modal" class="modal-overlay" aria-labelledby="playlist-cover-crop-title">
+    <div class="modal-content playlist-cover-crop-dialog">
+      <h2 id="playlist-cover-crop-title">Adjust playlist cover</h2>
+      <p>Drag the image to choose what appears on the cover.</p>
+      <canvas id="playlist-cover-crop-canvas" width="512" height="512" tabindex="0" aria-label="Playlist cover crop preview"></canvas>
+      <div class="playlist-cover-crop-zoom" role="group" aria-label="Zoom cover image">
+        <button type="button" id="playlist-cover-crop-out" aria-label="Zoom out"><i class="ph ph-minus" aria-hidden="true"></i></button>
+        <span id="playlist-cover-crop-level" aria-live="polite">100%</span>
+        <button type="button" id="playlist-cover-crop-in" aria-label="Zoom in"><i class="ph ph-plus" aria-hidden="true"></i></button>
+      </div>
+      <div class="playlist-cover-crop-actions">
+        <button type="button" class="btn btn-outline" id="playlist-cover-crop-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="playlist-cover-crop-save">Use cover</button>
       </div>
     </div>
   </div>

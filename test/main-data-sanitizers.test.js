@@ -5,7 +5,15 @@ const test = require('node:test');
 const {
   sanitizeImportedSettings,
   sanitizeLikedSongs,
+  sanitizeTrackReference,
 } = require('../app/main-data-sanitizers');
+
+test('remote session artwork survives sanitization only from approved image hosts', () => {
+  const track = { title: 'Song', artist: 'Artist', playback: { kind: 'youtube', videoId: 'AbCdEfGhI_1' }, artwork: 'https://lh3.googleusercontent.com/example=w544-h544' };
+  assert.equal(sanitizeTrackReference(track, 'track').artwork, track.artwork);
+  assert.equal(sanitizeTrackReference({ ...track, artwork: 'https://example.com/cover.jpg' }, 'track').artwork, undefined);
+  assert.equal(sanitizeTrackReference({ ...track, artwork: 'file:///etc/passwd' }, 'track').artwork, undefined);
+});
 
 test('imported settings retain only validated allowlisted values', () => {
   const sanitized = sanitizeImportedSettings({
@@ -109,4 +117,12 @@ test('listening history keeps source counts and recorded dates through settings 
 test('imported settings reject malformed Smart Playlist rules', () => {
   assert.throws(() => sanitizeImportedSettings({ customSmartPlaylists: [{ id: 'x', name: 'X', rules: [{ field: 'played', value: 'maybe' }] }] }), /invalid/);
   assert.throws(() => sanitizeImportedSettings({ trackNotes: { '/music/a.flac': 'x'.repeat(2001) } }), /invalid string value/);
+});
+
+test('playlist folders survive backup sanitization and reject duplicate or malformed identities', () => {
+  const folders = [{ id: 'folder-1', name: 'Soundtracks', collapsed: true }];
+  assert.deepEqual(sanitizeImportedSettings({ playlistFolders: folders }).playlistFolders, folders);
+  assert.throws(() => sanitizeImportedSettings({ playlistFolders: [null] }));
+  assert.throws(() => sanitizeImportedSettings({ playlistFolders: [folders[0], folders[0]] }));
+  assert.throws(() => sanitizeImportedSettings({ playlistFolders: [{ id: 'x', name: ' ' }] }));
 });

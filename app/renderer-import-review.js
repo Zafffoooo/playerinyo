@@ -155,7 +155,8 @@ async function showPlaylistImportReview(importResult, reimportTarget) {
 }
 
 var versionPickerRequest = 0;
-async function openVersionPicker(track) {
+async function openVersionPicker(track, playAfter) {
+  var playbackAtOpen=playbackGeneration;
   if (!track || !(isRemotePlaybackTrack(track) || (track.csvRecord && !track.matchedFile)) || !window.api.searchYouTubeMusic) return;
   var modal = $('version-picker-modal');
   var results = $('version-picker-results');
@@ -198,7 +199,7 @@ async function openVersionPicker(track) {
         hideModal(modal); versionPickerRequest++;
         renderQueue(); if (isFullscreenQueueOpen()) renderFullscreenQueue();
         if (track.csvRecord && state.currentView === track.sourcePlaylistId) renderPlaylist(track.sourcePlaylistId);
-        if (state.currentPlayingTrack === track) playTrack(track, { preserveQueueCursors: true });
+        if (state.currentPlayingTrack === track || playAfter && playbackGeneration===playbackAtOpen) playTrack(track, { preserveQueueCursors: true });
         else showToast('Selected version saved.');
       });
       results.appendChild(button);

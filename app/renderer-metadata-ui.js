@@ -1149,7 +1149,7 @@ function initMetadataControls() {
     if (pl.name === nextName) showToast('Renamed playlist to "' + nextName + '".');
   });
   pctxCover = $('pctx-cover');
-  if (pctxCover) pctxCover.addEventListener('click', async function () { var pl = currentContextMenuPlaylist; if (!pl) return; var img = await window.api.openImage(); if (img) { pl.cover = img; await persistPlaylists(state.playlists); renderSidebarPlaylists(); if (state.currentView === pl.id) renderPlaylist(pl.id); } });
+  if (pctxCover) pctxCover.addEventListener('click', async function () { var pl = currentContextMenuPlaylist; if (!pl) return; var coverImage = await choosePlaylistCover(); if (coverImage) { pl.cover = coverImage; await persistPlaylists(state.playlists); renderSidebarPlaylists(); if (state.currentView === pl.id) renderPlaylist(pl.id); } });
   pctxColor = $('pctx-color');
   if (pctxColor) pctxColor.addEventListener('click', function () {
     var pl = currentContextMenuPlaylist; if (!pl) return;
@@ -1172,6 +1172,7 @@ function initMetadataControls() {
     var pl = currentContextMenuPlaylist; if (!pl) return;
     var copyName = getUniquePlaylistName((pl.name || 'Playlist') + ' (Copy)');
     var copy = Object.assign({}, JSON.parse(JSON.stringify(pl)), { id: 'pl_' + Date.now(), name: copyName, pinned: false, lastPlayed: null });
+    copy.tracks.forEach(function(record) { record.EntryId=createQueueEntryId(); });
     state.playlists.push(copy);
     await persistPlaylists(state.playlists);
     renderSidebarPlaylists();

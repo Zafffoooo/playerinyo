@@ -130,6 +130,12 @@ function sanitizeTrackReference(value, key) {
     next.playback = { kind: 'youtube', videoId: String(value.playback.videoId) };
     next.resolvedSource = 'youtube';
     next.playbackSource = 'youtube';
+    if (typeof value.artwork === 'string' && value.artwork.length <= 4096) {
+      try {
+        const image = new URL(value.artwork);
+        if (image.protocol === 'https:' && !image.username && !image.password && ['lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'i.ytimg.com'].includes(image.hostname)) next.artwork = image.href;
+      } catch (_) { /* Ignore old invalid artwork references. */ }
+    }
   }
   return next;
 }
@@ -350,6 +356,18 @@ function sanitizeImportedSettings(settings) {
   if (Object.prototype.hasOwnProperty.call(settings, 'eqGains')) {
     if (!Array.isArray(settings.eqGains) || settings.eqGains.length !== 5) backupSettingError('eqGains', 'must contain five bands');
     next.eqGains = settings.eqGains.map((gain, index) => boundedBackupNumber(gain, `eqGains[${index}]`, -12, 12));
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'playlistFolders')) {
+    if (!Array.isArray(settings.playlistFolders) || settings.playlistFolders.length > 1000) backupSettingError('playlistFolders', 'must be an array');
+    const folderIds = new Set();
+    next.playlistFolders = settings.playlistFolders.map((folder, index) => {
+      if (!isPlainObject(folder)) backupSettingError('playlistFolders', 'contains an invalid folder');
+      const id = boundedBackupString(folder.id, `playlistFolders[${index}].id`, 100, false);
+      const name = boundedBackupString(folder.name, `playlistFolders[${index}].name`, 120, false);
+      if (!id.trim() || !name.trim() || folderIds.has(id)) backupSettingError('playlistFolders', 'contains an empty name or duplicate identity');
+      folderIds.add(id);
+      return { id, name, collapsed: folder.collapsed === true };
+    });
   }
   if (Object.prototype.hasOwnProperty.call(settings, 'libraryRoots')) {
     if (!Array.isArray(settings.libraryRoots) || settings.libraryRoots.length > 512) backupSettingError('libraryRoots', 'must be an array of at most 512 paths');

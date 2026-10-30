@@ -1,5 +1,9 @@
 # Playerinyo
 
+[Türkçe](#türkçe) · [English](#english) · [Downloads / İndir](https://github.com/Zafffoooo/playerinyo/releases/latest) · [Changelog](CHANGELOG.md)
+
+## Türkçe
+
 Yerel müzik arşivleri için Electron tabanlı vibecoded masaüstü oynatıcı.
 
 ## Özellikler
@@ -9,8 +13,21 @@ Yerel müzik arşivleri için Electron tabanlı vibecoded masaüstü oynatıcı.
 - Last.fm destekli Radyo, YouTube Music araması ve arama sonucundan Şarkı Radyosu
 - İlerleme ve hata durumlarıyla İndirilenler sayfası, metadata/kapak görseli düzenleme ve şarkı sözleri
 - Spotify hesap verisi ZIP/JSON dosyasından, herkese açık bağlantıdan veya bağlı hesaptan playlist aktarımı
-- MusicBrainz sanatçı/albüm kataloğu ve yerel kütüphane karşılaştırması
+- Sayfalı albüm kataloğu, sürüm başına şarkı sayıları ve ayrı yerel/çevrimiçi sanatçı görünümleri
+- Playlist klasörleri, durum/tür filtreleri, çoklu seçim ve toplu taşıma
+- Eksik şarkıları isteğe bağlı çevrimiçi eşleştirme, albüm bulma ve sürüm seçimi
+- Sırayı playlist olarak kaydetme, tekrar inceleme ve sürükleme/yakınlaştırma ile kapak kırpma
 - Dinleme istatistikleri, beğeniler, yedekleme ve geri yükleme
+
+## Playlist kullanımı
+
+- Tek tıkla seçin, çift tık veya Enter ile çalın. Ctrl/Cmd+tık ile seçime ekleyin/çıkarın; Shift+tık veya Shift+↑/↓ ile aralık seçin. Ctrl/Cmd+A görünen şarkıları seçer; boş alana tıklamak veya Escape seçimi temizler.
+- Seçili şarkılara sağ tıklayarak sıraya/başka playliste ekleyin veya **Find missing tracks** ile eksikleri arayın. Toplu arama dosya indirmez ve şarkı çalmaz; eşleşmeyen sonuçlar sürüm seçimiyle incelenebilir.
+- Soluk şarkıya çift tıklamak önce yerel eşleşmeyi, ardından güvenilir çevrimiçi eşleşmeyi dener. **Choose another version**, **Find album** ve **Clear online match** işlemleri sağ tık menüsündedir.
+- **All / Local / Online / Missing** ve tür düğmeleri playlist aramasıyla birlikte çalışır. Filtreliyken sürükleyerek sıralama kapalıdır; **Custom Order** ve filtresiz görünümde seçili şarkıları blok olarak taşıyabilirsiniz.
+- **New folder** ile tek seviyeli klasör oluşturun; playlisti sürükleyerek veya menüden klasöre taşıyın. Klasörü silmek playlistleri silmez.
+- Sıra panelindeki **Save as playlist** kalan sırayı kaydeder; çalan şarkıyı dahil etmek isteğe bağlıdır.
+- **Find duplicates** ile playlist kopyalarını inceleyin. Kapak değiştirirken görseli sürükleyip +/− ile kırpma alanını ayarlayın.
 
 ## Başlatma
 
@@ -101,6 +118,10 @@ node scripts/package.js --platform=darwin --arch=x64
 
 ---
 
+## English
+
+An Electron desktop player for local music collections, with optional online discovery and playback.
+
 ## Features
 
 - Local library, album views, Smart Playlists, and playlists
@@ -108,8 +129,21 @@ node scripts/package.js --platform=darwin --arch=x64
 - Last.fm-powered Radio, YouTube Music search, and Song Radio from search results
 - Downloads page with progress and error states, metadata/artwork editing, and lyrics
 - Spotify playlist import from account-data ZIP/JSON, public link, or connected account
-- MusicBrainz artist/album catalog with local library comparison
+- Paged album catalog, edition track counts, and separate local/online artist views
+- Playlist folders, status/genre filters, multi-selection, and block reordering
+- On-demand online matching for missing tracks, album lookup, and version selection
+- Save the queue as a playlist, review duplicates, and crop playlist artwork with drag and zoom
 - Listening statistics, likes, backups, and restore
+
+## Using playlists
+
+- Click to select; double-click or press Enter to play. Ctrl/Cmd-click toggles individual selections; Shift-click or Shift+↑/↓ selects a range. Ctrl/Cmd+A selects visible tracks; clicking blank space or pressing Escape clears the selection.
+- Right-click selected tracks to add them to the queue/another playlist or **Find missing tracks**. Batch matching neither downloads audio nor starts playback; unmatched results can be reviewed through version selection.
+- Double-click an unavailable track to try a local match, then a confident online match. **Choose another version**, **Find album**, and **Clear online match** are available in the context menu.
+- Combine **All / Local / Online / Missing**, genre chips, and playlist text search. Drag selected tracks as a block in unfiltered **Custom Order**; reordering is disabled while filtering.
+- Create single-level folders with **New folder**, then drag playlists into them or use the playlist menu. Deleting a folder keeps its playlists.
+- **Save as playlist** in the queue panel saves the remaining queue, with an option to include the current track.
+- Use **Find duplicates** to review playlist copies. When changing artwork, drag the image and use +/− to adjust the square crop.
 
 ## Start
 

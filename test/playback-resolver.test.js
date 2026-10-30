@@ -102,3 +102,11 @@ test('remote resolved tracks retain display metadata and only a stable video ID'
     playbackSource: 'youtube',
   });
 });
+test('saved liked song plays with a stable video ID even without a candidate ID', async () => {
+  let playedVideoId = '';
+  const resolver = createPlaybackResolver({ prepareYouTube: async (videoId) => { playedVideoId = videoId; return { src: 'https://example.test/audio' }; } });
+  const saved = { title: 'Babel', artist: 'Massive Attack', playback: { kind: 'youtube', videoId: '93egH4aj25o' } };
+  assert.deepEqual(await resolver.preparePlayback(saved), { src: 'https://example.test/audio' });
+  assert.equal(playedVideoId, saved.playback.videoId);
+  await assert.rejects(resolver.preparePlayback({ ...saved, playback: { kind: 'youtube', videoId: '../unsafe' } }), /Invalid resolved playback descriptor/);
+});

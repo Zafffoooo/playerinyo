@@ -305,6 +305,7 @@ async function initApp() {
   var results = await Promise.all([window.api.loadLibrary(), window.api.loadPlaylists(), window.api.loadMappings(), window.api.loadSettings(), window.api.loadLikedSongs(), window.api.loadListeningStats ? window.api.loadListeningStats() : Promise.resolve({})]);
   setMusicFiles(Array.isArray(results[0]) ? results[0] : []);
   state.playlists = Array.isArray(results[1]) ? results[1] : [];
+  if (normalizePlaylistEntryIds()) await persistPlaylists(state.playlists);
   state.mappings = results[2] && typeof results[2] === 'object' ? results[2] : {};
   appSettings = settingsWithDefaults(results[3]);
   listeningStats = results[5] && typeof results[5] === 'object' ? results[5] : {};
@@ -1518,7 +1519,8 @@ function debounce(func, wait) {
 function filterPlaylistTrackRows(value) {
   trackRenderState.filterValue = String(value || '');
   trackRenderState.filterView = state.currentView;
-  renderTracksTable(!!trackRenderState.allowReorder);
+  var playlist=getCurrentRegularPlaylist();
+  renderTracksTable(!!playlist && (!playlist.sortBy || playlist.sortBy==='Custom Order'));
 }
 
 // Playlist track search logic
@@ -1698,6 +1700,11 @@ function initPlaybackControls() {
     if (!e || e.defaultPrevented || modalStack.length || startupErrorRendered) return;
     var primaryModifier = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
     if (primaryModifier && !isTextEditingShortcutTarget(e.target)) {
+      if (e.code === 'KeyA' && $('tracks-table-container').style.display !== 'none' && trackRenderState.rows.length) {
+        e.preventDefault();
+        selectAllVisibleTracks();
+        return;
+      }
       if (e.repeat && ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'KeyS', 'KeyL', 'KeyR', 'KeyQ', 'KeyZ'].includes(e.code)) { e.preventDefault(); return; }
       if (e.code === 'ArrowRight') {
         e.preventDefault();

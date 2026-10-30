@@ -655,16 +655,19 @@ function toggleQueue() { setQueueOpen(!isQueueOpen); }
 
 // A remote Radio queue entry persists only a stable YouTube video ID.  Build
 // the thumbnail from that ID instead of carrying an arbitrary remote URL.
+function isAllowedRemoteArtwork(value) {
+  if (typeof value !== 'string' || value.length > 4096) return false;
+  try {
+    var url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && ['lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'i.ytimg.com', 'i.scdn.co', 'mosaic.scdn.co'].includes(url.hostname);
+  } catch (_) { return false; }
+}
 function getTrackArtworkUrl(track) {
   if (!track) return '';
   if (track.matchedFile && typeof track.matchedFile.picture === 'string' && track.matchedFile.picture) return track.matchedFile.picture;
   if (isRemotePlaybackTrack(track)) {
-    if (typeof track.artwork === 'string' && track.artwork.length <= 4096) {
-      try {
-        var imageUrl = new URL(track.artwork);
-        if (imageUrl.protocol === 'https:' && !imageUrl.username && !imageUrl.password && ['lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'i.ytimg.com', 'i.scdn.co', 'mosaic.scdn.co'].includes(imageUrl.hostname)) return imageUrl.href;
-      } catch (_) { /* Fall back to the stable video thumbnail. */ }
-    }
+    if (typeof track._cachedArtwork === 'string') return track._cachedArtwork;
+    if (isAllowedRemoteArtwork(track.artwork)) return track.artwork;
     return 'https://i.ytimg.com/vi/' + track.playback.videoId + '/hqdefault.jpg';
   }
   return '';
@@ -703,6 +706,7 @@ function renderQueue(options) {
   var allTracks = state.isShuffle ? state.shuffleQueue : state.playQueueTracks.filter(function (t) { return !t.isDisabled; });
   var curIdx = getPlaybackSequenceCursorIndex(allTracks);
   var cur = state.currentPlayingTrack;
+  var saveQueue=document.createElement('button'); saveQueue.className='btn btn-outline'; saveQueue.textContent='Save as playlist'; saveQueue.onclick=saveCurrentQueueAsPlaylist; ql.appendChild(saveQueue);
   var dragIndex = -1;
   var lazy = appSettings.lazyLoading ? ' loading="lazy"' : '';
   function makePic(track) { var artwork = getTrackArtworkUrl(track); var label = track && (track.album || track.title) || 'track'; return artwork ? '<img src="' + esc(artwork) + '" alt="Artwork for ' + esc(label) + '"' + lazy + ' style="width:36px;height:36px;border-radius:3px;object-fit:cover;flex-shrink:0;" />' : '<div style="width:36px;height:36px;background:#333;border-radius:3px;flex-shrink:0;"></div>'; }
@@ -903,6 +907,10 @@ function switchView(viewId, addToHistory) {
     setViewKind('artist');
     $('view-title').style.display = 'none';
     renderArtistAlbumPage(viewId.slice(13));
+  } else if (viewId.indexOf('library-artist:') === 0) {
+    setViewKind('artist');
+    $('view-title').style.display = 'none';
+    renderLibraryArtistProfile(viewId.slice(15));
   } else if (viewId.indexOf('artist:') === 0) {
     setViewKind('artist');
     $('view-title').style.display = 'none';
@@ -1338,6 +1346,7 @@ function renderSidebarPlaylists() {
     if (!pl.isSpecial) bindPlaylistTrackDropTarget(el, pl);
     list.appendChild(el);
   });
+  renderPlaylistFolderGroups(list);
   var dockPinned = state.playlists.filter(function (playlist) { return playlist.pinned; });
   var dockRecent = state.playlists.filter(function (playlist) { return !playlist.pinned; }).concat(pseudoLiked).sort(function (a, b) {
     return (Date.parse(b.lastPlayed || '') || 0) - (Date.parse(a.lastPlayed || '') || 0);
@@ -1601,7 +1610,8 @@ function filterPlaylists(q) {
     if (visible) visibleSmart++;
   });
   var smartSection = $('smart-mixes-section'); if (smartSection) smartSection.hidden = visibleSmart === 0;
-  var regularSection = $('regular-playlists-section'); if (regularSection) regularSection.hidden = visibleRegular === 0;
+  var regularSection = $('regular-playlists-section'); if (regularSection) regularSection.hidden = visibleRegular === 0 && !!query;
+  document.querySelectorAll('#playlists-list .playlist-folder').forEach(function (folder) { var body=folder.querySelector('.playlists-grid'); var visible=Array.from(body.querySelectorAll('.playlist-item')).some(function(card) { return card.style.display !== 'none'; }); folder.hidden=!!query && !visible; var info=(appSettings.playlistFolders || []).find(function(f) { return f.id===folder.dataset.folderId; }); body.hidden=query && visible ? false : !!(info && info.collapsed); });
   var empty = $('playlist-search-empty'); if (empty) empty.hidden = visibleSmart + visibleRegular > 0;
 }
 

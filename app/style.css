@@ -1746,9 +1746,16 @@ tr.drag-over { border-top: 2px solid var(--accent); }
 .youtube-music-row-details{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
 .youtube-music-row-details strong,.youtube-music-row-details span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .youtube-music-row-details span{font-size:12px;color:#b8b8b8}
+.youtube-music-metadata-link{max-width:100%;padding:0;border:0;background:none;color:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;font:inherit}
+.youtube-music-metadata-link:hover{text-decoration:underline;text-underline-offset:3px}
+.youtube-music-metadata-link:focus-visible{outline:2px solid #f5f5f5;outline-offset:2px}
 .youtube-music-row-status:not(:empty){color:#e0e0e0}
 .youtube-music-row .btn{width:auto;flex-shrink:0}
 .youtube-music-row .btn:disabled{opacity:.7;cursor:progress}
+.catalog-choice-content{max-width:520px}
+.catalog-choice-list{display:flex;flex-direction:column;gap:4px;max-height:55vh;overflow:auto;margin:18px 0}
+.catalog-choice-item{width:100%;border:0;border-radius:8px;padding:12px 14px;background:#242424;color:#f5f5f5;text-align:left;cursor:pointer}
+.catalog-choice-item:hover,.catalog-choice-item:focus-visible{background:#383838;outline:2px solid #f5f5f5;outline-offset:-2px}
 @media(max-width:650px){.youtube-music-row{flex-wrap:wrap}.youtube-music-row-details{flex-basis:calc(100% - 60px)}}
 .playlist-source-modal{width:min(460px,calc(100vw - 32px));display:flex;flex-direction:column;gap:14px}
 .playlist-source-modal h2{margin:0}

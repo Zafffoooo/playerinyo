@@ -14,7 +14,7 @@ function stableCandidate(candidate) {
   };
 }
 function validateResolvedTrack(track) {
-  if (!track || !track.candidateId || !track.title || !track.artist || !track.playback) return false;
+  if (!track || !track.title || !track.artist || !track.playback) return false;
   if (track.playback.kind === 'local-file') return !!(track.matchedFile && track.playback.filePath);
   return track.playback.kind === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(track.playback.videoId || '');
 }

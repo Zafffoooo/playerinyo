@@ -325,7 +325,7 @@ const MAX_PLAYLISTS = 10000;
 const MAX_PLAYLIST_TRACKS = 250000;
 const PLAYLIST_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm', 'www.google.com', 'musicbrainz.org']);
-const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lastfm.freetls.fastly.net']);
+const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'lastfm.freetls.fastly.net']);
 const APP_ENTRY_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
 const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinyo/releases/latest';
 const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken'];
@@ -869,7 +869,8 @@ function validateBackupPlaylists(playlists) {
     if (Object.prototype.hasOwnProperty.call(playlist, 'color')) {
       if (typeof playlist.color !== 'string' || !PLAYLIST_COLOR_PATTERN.test(playlist.color)) throw new Error(`Backup ${key}.color is invalid`);
     }
-    validateBackupStringField(playlist, 'cover', key, 16384, { nullable: true });
+    validateBackupStringField(playlist, 'folderId', key, 100, { nullable: true });
+    validateBackupStringField(playlist, 'cover', key, 2097152, { nullable: true });
     validateBackupStringField(playlist, 'lastPlayed', key, 100, { nullable: true });
     validateBackupStringField(playlist, 'sortBy', key, 100, { nullable: true });
     if (Object.prototype.hasOwnProperty.call(playlist, 'sortDirection') && !['asc', 'desc'].includes(playlist.sortDirection)) throw new Error(`Backup ${key}.sortDirection must be asc or desc`);
@@ -1920,31 +1921,101 @@ registerIpcHandler('artist-catalog:search', async (event, rawQuery) => {
     return { ok: true, artists: (data.artists || []).filter(artist => validMusicBrainzId(artist.id)).map(artist => ({ id: artist.id, name: String(artist.name || '').slice(0, 200), disambiguation: String(artist.disambiguation || '').slice(0, 200), type: String(artist.type || '').slice(0, 40) })) };
   } catch (error) { return { ok: false, error: error.message || 'Artist search failed.' }; }
 });
-registerIpcHandler('artist-catalog:profile', async (event, artistId) => {
+registerIpcHandler('artist-catalog:song-albums', async (event, rawTitle, rawArtist, rawAlbum) => {
+  const title = String(rawTitle || '').trim().slice(0, 200);
+  const artist = String(rawArtist || '').trim().slice(0, 200);
+  const album = String(rawAlbum || '').trim().slice(0, 200);
+  if (!title || !artist) return { ok: false, error: 'Song and artist are required.' };
+  try {
+    const normalized = value => String(value || '').toLocaleLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    if (album) {
+      const baseAlbum = album.replace(/\s*[-–—:]\s*(?:\d{4}\s*|\d{1,3}(?:st|nd|rd|th)\s*)?(?:remaster(?:ed)?|deluxe|expanded|anniversary|special).*$/i, '').replace(/\s*[([{](?:\d{4}\s*|\d{1,3}(?:st|nd|rd|th)\s*)?(?:remaster(?:ed)?|deluxe|expanded|anniversary|special)[^\])}]*[\])}]\s*$/i, '').trim() || album;
+      const albumQuery = `releasegroup:"${baseAlbum.replace(/["\\]/g, ' ')}" AND artist:"${artist.replace(/["\\]/g, ' ')}"`;
+      const groupData = await cachedArtistCatalog('album-name:' + albumQuery, 6 * 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release-group/?query=${encodeURIComponent(albumQuery)}&fmt=json&limit=20`));
+      const direct = (groupData['release-groups'] || []).filter(group => validMusicBrainzId(group.id) && normalized(group.title) === normalized(baseAlbum) && ['Album', 'EP', 'Single'].includes(group['primary-type']) && !group['secondary-types']?.some(type => ['Compilation', 'Live', 'DJ-mix'].includes(type))).map(group => {
+        const credit = (group['artist-credit'] || []).find(row => row?.artist && validMusicBrainzId(row.artist.id) && normalized(row.artist.name) === normalized(artist));
+        return credit ? { id: group.id, title: String(group.title || '').slice(0, 300), date: String(group['first-release-date'] || '').slice(0, 20), primaryType: group['primary-type'], artist: { id: credit.artist.id, name: String(credit.artist.name || artist).slice(0, 200) } } : null;
+      }).filter(Boolean).sort((a, b) => (a.primaryType === 'Album' ? -1 : 1) - (b.primaryType === 'Album' ? -1 : 1) || a.date.localeCompare(b.date));
+      if (direct.length) return { ok: true, albums: direct };
+    }
+    const baseTitle = title.replace(/\s*[-–—]\s*(?:\d{4}\s*)?(?:re)?master(?:ed)?(?:\s+version)?\s*$/i, '').trim() || title;
+    const query = `recording:"${baseTitle.replace(/["\\]/g, ' ')}" AND artist:"${artist.replace(/["\\]/g, ' ')}"`;
+    const data = await cachedArtistCatalog('song-albums:' + query, 6 * 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json&limit=30`));
+    const results = new Map();
+    for (const recording of data.recordings || []) {
+      if (normalized(recording.title) !== normalized(baseTitle) && normalized(recording.title) !== normalized(title)) continue;
+      const artistCredit = (recording['artist-credit'] || []).find(credit => credit && credit.artist && validMusicBrainzId(credit.artist.id) && normalized(credit.artist.name) === normalized(artist));
+      if (!artistCredit) continue;
+      for (const release of recording.releases || []) {
+        const group = release['release-group'];
+        if (!group || !validMusicBrainzId(group.id) || !['Album', 'EP', 'Single'].includes(group['primary-type'])) continue;
+        if (release.status && release.status !== 'Official') continue;
+        if (group['secondary-types']?.some(type => ['Compilation', 'Live', 'DJ-mix'].includes(type))) continue;
+        const name = String(release.title || '').slice(0, 300);
+        if (!results.has(group.id)) results.set(group.id, { id: group.id, title: name, date: String(release.date || '').slice(0, 20), primaryType: group['primary-type'], artist: { id: artistCredit.artist.id, name: String(artistCredit.artist.name || artist).slice(0, 200) } });
+      }
+    }
+    const albums = [...results.values()].sort((a, b) => {
+      const score = item => (album && normalized(item.title) === normalized(album) ? 10 : 0) + (item.primaryType === 'Album' ? 3 : item.primaryType === 'EP' ? 2 : 1);
+      return score(b) - score(a) || a.date.localeCompare(b.date);
+    });
+    return { ok: true, albums: albums.slice(0, 20) };
+  } catch (error) { return { ok: false, error: error.message || 'Album lookup failed.' }; }
+});
+registerIpcHandler('artist-catalog:image', async (event, artistId) => {
+  if (!validMusicBrainzId(artistId)) return { ok: false };
+  try {
+    const image = await cachedArtistCatalog('image:' + artistId, 7 * 24 * 60 * 60 * 1000, async () => {
+      const artist = await fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/artist/${artistId}?inc=url-rels&fmt=json`);
+      const relation = (artist.relations || []).find(item => item.type === 'wikidata' && /^https:\/\/www\.wikidata\.org\/wiki\/Q\d+$/.test(item.url?.resource || ''));
+      if (!relation) return null;
+      const entityId = relation.url.resource.split('/').pop();
+      let filename;
+      try {
+        const wikidata = await fetchMetadataJson(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${entityId}&property=P18&format=json`, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } });
+        filename = wikidata.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+      } catch (_) { /* The entity JSON endpoint remains available when the API is overloaded. */ }
+      if (!filename) {
+        const entity = await fetchMetadataJson(`https://www.wikidata.org/wiki/Special:EntityData/${entityId}.json`, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } });
+        filename = entity.entities?.[entityId]?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+      }
+      if (typeof filename !== 'string' || !filename.trim() || filename.length > 300 || /[\u0000-\u001f\u007f]/.test(filename)) return null;
+      const sourceUrl = `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(filename.replace(/ /g, '_'))}`;
+      let info;
+      try {
+        const commons = await fetchMetadataJson(`https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent('File:' + filename)}&prop=imageinfo&iiprop=url%7Cextmetadata&iiurlwidth=1400&format=json`, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } });
+        info = Object.values(commons.query?.pages || {})[0]?.imageinfo?.[0];
+      } catch (_) { /* The direct Commons file route still works during API failures. */ }
+      const metadataUrl = String(info?.thumburl || info?.url || '');
+      const url = /^https:\/\/(?:upload|thumb)\.wikimedia\.org\//.test(metadataUrl) ? metadataUrl : `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(filename)}?width=1400`;
+      const plain = value => String(value || '').replace(/<[^>]*>/g, '').replace(/&(?:amp|quot|lt|gt);/g, ' ').trim().slice(0, 300);
+      return { url, sourceUrl: /^https:\/\/commons\.wikimedia\.org\//.test(info?.descriptionurl || '') ? info.descriptionurl : sourceUrl, author: plain(info?.extmetadata?.Artist?.value), license: plain(info?.extmetadata?.LicenseShortName?.value), licenseUrl: String(info?.extmetadata?.LicenseUrl?.value || '').slice(0, 1000) };
+    });
+    return { ok: true, image };
+  } catch (_) { return { ok: true, image: null }; }
+});
+registerIpcHandler('artist-catalog:albums', async (event, artistId, rawOffset, rawLimit) => {
+  if (!validMusicBrainzId(artistId)) return { ok: false, error: 'Invalid artist identity.' };
+  const offset = Number(rawOffset);
+  const limit = Number(rawLimit);
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return { ok: false, error: 'Invalid album page.' };
+  try {
+    const page = await cachedArtistCatalog(`groups:${artistId}:${offset}:${limit}`, 24 * 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release-group?artist=${artistId}&type=album%7Cep&fmt=json&limit=${limit}&offset=${offset}`));
+    return { ok: true, offset, limit, total: Math.max(0, Number(page['release-group-count']) || 0), groups: (page['release-groups'] || []).filter(group => validMusicBrainzId(group.id)).map(group => ({ id: group.id, title: String(group.title || '').slice(0, 300), date: String(group['first-release-date'] || '').slice(0, 20), primaryType: String(group['primary-type'] || '') })) };
+  } catch (error) { return { ok: false, error: error.message || 'Artist catalog failed.' }; }
+});
+registerIpcHandler('artist-catalog:popular', async (event, artistId) => {
   if (!validMusicBrainzId(artistId)) return { ok: false, error: 'Invalid artist identity.' };
   try {
-    const groups = await cachedArtistCatalog('groups:' + artistId, 24 * 60 * 60 * 1000, async () => {
-      const all = [];
-      for (let offset = 0; offset < 500; offset += 100) {
-        const page = await fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release-group?artist=${artistId}&type=album%7Cep&fmt=json&limit=100&offset=${offset}`);
-        all.push(...(page['release-groups'] || []));
-        if (all.length >= Number(page['release-group-count'] || 0) || !(page['release-groups'] || []).length) break;
-      }
-      return all;
-    });
-    let popular = [];
-    try {
-      const data = await cachedArtistCatalog('popular:' + artistId, 6 * 60 * 60 * 1000, () => fetchMetadataJson(`https://api.listenbrainz.org/1/popularity/top-recordings-for-artist/${artistId}?count=10`, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } }));
-      popular = (Array.isArray(data) ? data : []).slice(0, 10).map(row => ({ title: String(row.recording_name || '').slice(0, 300), recordingMbid: String(row.recording_mbid || ''), listens: Number(row.total_listen_count) || 0 })).filter(row => row.title);
-    } catch (_) { /* Popularity is optional; album coverage remains available. */ }
-    return { ok: true, groups: groups.filter(group => validMusicBrainzId(group.id)).map(group => ({ id: group.id, title: String(group.title || '').slice(0, 300), date: String(group['first-release-date'] || '').slice(0, 20), primaryType: String(group['primary-type'] || '') })), popular };
-  } catch (error) { return { ok: false, error: error.message || 'Artist catalog failed.' }; }
+    const data = await cachedArtistCatalog('popular:' + artistId, 6 * 60 * 60 * 1000, () => fetchMetadataJson(`https://api.listenbrainz.org/1/popularity/top-recordings-for-artist/${artistId}?count=10`, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } }));
+    return { ok: true, songs: (Array.isArray(data) ? data : []).slice(0, 10).map(row => ({ title: String(row.recording_name || '').slice(0, 300), recordingMbid: String(row.recording_mbid || ''), listens: Number(row.total_listen_count) || 0 })).filter(row => row.title) };
+  } catch (error) { return { ok: false, error: error.message || 'Artist popularity failed.' }; }
 });
 registerIpcHandler('artist-catalog:editions', async (event, groupId) => {
   if (!validMusicBrainzId(groupId)) return { ok: false, error: 'Invalid album identity.' };
   try {
-    const data = await cachedArtistCatalog('editions:' + groupId, 24 * 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release?release-group=${groupId}&fmt=json&limit=100`));
-    return { ok: true, editions: (data.releases || []).filter(release => validMusicBrainzId(release.id)).map(release => ({ id: release.id, title: String(release.title || '').slice(0, 300), date: String(release.date || '').slice(0, 20), country: String(release.country || '').slice(0, 20), status: String(release.status || '').slice(0, 30), tracks: (release.media || []).reduce((count, medium) => count + (Number(medium['track-count']) || 0), 0) })) };
+    const data = await cachedArtistCatalog('editions-v2:' + groupId, 24 * 60 * 60 * 1000, () => fetchArtistCatalogJson(`https://musicbrainz.org/ws/2/release?release-group=${groupId}&inc=media&fmt=json&limit=100`));
+    return { ok: true, editions: (data.releases || []).filter(release => validMusicBrainzId(release.id)).map(release => ({ id: release.id, title: String(release.title || '').slice(0, 300), date: String(release.date || '').slice(0, 20), country: String(release.country || '').slice(0, 20), status: String(release.status || '').slice(0, 30), tracks: release.media?.length ? (release.media || []).reduce((count, medium) => count + (Number(medium['track-count']) || 0), 0) : null })) };
   } catch (error) { return { ok: false, error: error.message || 'Album editions failed.' }; }
 });
 registerIpcHandler('artist-catalog:tracks', async (event, releaseId) => {
@@ -1957,6 +2028,26 @@ registerIpcHandler('artist-catalog:tracks', async (event, releaseId) => {
 
 const youtubeMusicSearchCache = new Map();
 const youtubeMusicSearchInFlight = new Map();
+registerIpcHandler('youtube-artwork:cache', async (event, videoId, artworkUrl) => {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(String(videoId || ''))) return '';
+  const base = path.join(COVERS_DIR, `youtube-${videoId}`);
+  for (const extension of ['jpg', 'png', 'webp']) {
+    const cachedPath = `${base}.${extension}`;
+    if (fs.existsSync(cachedPath)) return pathToFileURL(cachedPath).href;
+  }
+  let imageUrl;
+  try { imageUrl = new URL(String(artworkUrl || '')); }
+  catch (_) { return ''; }
+  if (imageUrl.protocol !== 'https:' || imageUrl.username || imageUrl.password || !['lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'i.ytimg.com'].includes(imageUrl.hostname)) return '';
+  try {
+    const image = await fetchAllowedImage(imageUrl.href, { 'User-Agent': APP_USER_AGENT, Accept: 'image/*' });
+    const extension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[image.contentType.split(';')[0].toLowerCase()];
+    if (!extension) return '';
+    const cachedPath = `${base}.${extension}`;
+    await fs.promises.writeFile(cachedPath, image.imageBuffer, { flag: 'wx' }).catch(error => { if (error.code !== 'EEXIST') throw error; });
+    return pathToFileURL(cachedPath).href;
+  } catch (_) { return ''; }
+});
 registerIpcHandler('search-youtube-music', async (event, rawQuery) => {
   const query = String(rawQuery || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
   if (query.length < 2) return { ok: false, error: 'Enter at least two characters.' };
@@ -2001,6 +2092,8 @@ registerIpcHandler('search-youtube-music', async (event, rawQuery) => {
       const secondary = columns[1] || [];
       const segments = secondary.map(run => run.text || '').join('').split(/\s*•\s*/);
       const artist = String(segments[0] || '').slice(0, 200);
+      const albumRun = secondary.find(run => /^MPREb_[A-Za-z0-9_-]+$/.test(String(run.navigationEndpoint?.browseEndpoint?.browseId || '')));
+      const album = String(albumRun?.text || '').slice(0, 300);
       const durationLabel = segments.find(segment => /^\d+:\d\d(?::\d\d)?$/.test(segment.trim()));
       const duration = durationLabel ? durationLabel.trim().split(':').reduce((value, part) => value * 60 + Number(part), 0) : 0;
       const thumbnails = item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
@@ -2019,7 +2112,7 @@ registerIpcHandler('search-youtube-music', async (event, rawQuery) => {
       const hits = terms.filter(term => haystack.includes(term)).length;
       if (!hits) return null;
       const versionPenalty = /\b(remix|instrumental|edit|remaster)\b/i.test(title) && !/\b(remix|instrumental|edit|remaster)\b/i.test(query) ? 14 : 0;
-      return { videoId: id, title, artist, duration, artwork, source: 'YouTube Music', score: 40 - index + hits * 5 - versionPenalty };
+      return { videoId: id, title, artist, album, duration, artwork, source: 'YouTube Music', score: 40 - index + hits * 5 - versionPenalty };
     }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 30);
     const response = { ok: true, songs };
     youtubeMusicSearchCache.set(key, { at: Date.now(), result: response });

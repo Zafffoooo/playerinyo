@@ -199,6 +199,7 @@ function renderCurrentCollectionState() {
   else if (state.currentView === 'stats') renderStatsView();
   else if (state.currentView === 'downloads') renderDownloadQueue();
   else if (state.currentView && state.currentView.indexOf('artist:') === 0) renderArtistProfileById(state.currentView.slice(7));
+  else if (state.currentView && state.currentView.indexOf('library-artist:') === 0) renderLibraryArtistProfile(state.currentView.slice(15));
   else if (state.currentView && state.currentView.indexOf('artist-album:') === 0) renderArtistAlbumPage(state.currentView.slice(13));
   else if (state.currentView === 'search') { var search = $('global-search'); if (search) search.dispatchEvent(new Event('input')); }
   else if (state.currentView && state.currentView.indexOf('album:') === 0) {
@@ -463,6 +464,7 @@ function renderLibrary() {
 
 // FIX 5+6: renderAlbumDetail resets scroll, correct play button
 async function renderAlbumDetail(album, focusFilePath) {
+  if (state.currentView !== 'album:' + (album.id || album.name)) clearTrackSelection();
   var ca = $('content-area');
   if (state.currentView === 'library') {
     state.libraryScrollPos = ca ? ca.scrollTop : 0;
@@ -894,6 +896,7 @@ function refreshCurrentAlbumViewAfterDownload(job) {
 }
 
 function renderPlaylist(playlistId) {
+  var statusFilters=$('playlist-status-filters');if(statusFilters) statusFilters.hidden=true;
   setViewKind('playlist');
   hideAllViewRoots();
   $('tracks-table-container').style.display = 'block';
@@ -1001,6 +1004,7 @@ function renderPlaylist(playlistId) {
 
 
   state.currentTracks = sortedTracks.map(function (r) { return playlistRecordToPlaybackTrack(r, pl.id); });
+  renderPlaylistStatusFilters();
   // FIX 3: auto cover from first matched track
   var firstCover = null;
   for (var i = 0; i < state.currentTracks.length; i++) { if (state.currentTracks[i].matchedFile && state.currentTracks[i].matchedFile.picture) { firstCover = state.currentTracks[i].matchedFile.picture; break; } }
@@ -1008,7 +1012,7 @@ function renderPlaylist(playlistId) {
   var covEl = $('album-detail-cover'), wrap = $('album-detail-cover-wrap');
   if (cover) { covEl.src = cover; covEl.alt = 'Cover for ' + pl.name; covEl.style.display = 'block'; } else { covEl.removeAttribute('src'); covEl.alt = ''; covEl.style.display = 'none'; if (wrap) wrap.style.background = getSafePlaylistColor(pl.color); }
   covEl.style.cursor = 'pointer';
-  covEl.onclick = async function () { var img = await window.api.openImage(); if (img) { pl.cover = img; await persistPlaylists(state.playlists); renderSidebarPlaylists(); renderPlaylist(pl.id); } };
+  covEl.onclick = async function () { var coverImage = await choosePlaylistCover(); if (coverImage) { pl.cover = coverImage; await persistPlaylists(state.playlists); renderSidebarPlaylists(); renderPlaylist(pl.id); } };
   var ppb = $('album-cover-play-btn');
   if (ppb) {
     ppb.setAttribute('aria-label', 'Play ' + pl.name);
@@ -1031,6 +1035,10 @@ function trackTableFilterValue() {
 }
 
 function trackMatchesTableFilter(track, query) {
+  var status = trackRenderState.statusView === state.currentView ? trackRenderState.statusFilter : 'all';
+  if (status === 'local' && !track.matchedFile || status === 'online' && (track.matchedFile || !isRemotePlaybackTrack(track)) || status === 'missing' && !track.isDisabled) return false;
+  var genre=trackRenderState.statusView===state.currentView ? trackRenderState.genreFilter : '';
+  if(genre && !playlistTrackGenres(track).some(function(g) { return g.toLowerCase()===genre; })) return false;
   if (!query) return true;
   var csv = track && track.csvRecord ? track.csvRecord : null;
   var hay = [
@@ -1053,10 +1061,17 @@ function buildTrackRowsForTable(source, query) {
 }
 
 function buildPlaylistMembershipMap() {
-  if (trackRenderState.playlistMembership && trackRenderState.playlistMembershipRevision === playlistMembershipRevision) {
+  var membershipRevision = playlistMembershipRevision + ':' + libraryRevision + ':' + mappingsRevision;
+  if (trackRenderState.playlistMembership && trackRenderState.playlistMembershipRevision === membershipRevision) {
     return trackRenderState.playlistMembership;
   }
   var playlistMembership = new Map();
+  function addMember(key, playlist) {
+    if (!key) return;
+    if (!playlistMembership.has(key)) playlistMembership.set(key, []);
+    var members = playlistMembership.get(key);
+    if (!members.includes(playlist)) members.push(playlist);
+  }
   state.playlists.forEach(function (p) {
     if (p.isSpecial || !p.tracks) return;
     p.tracks.forEach(function (t) {
@@ -1066,12 +1081,13 @@ function buildPlaylistMembershipMap() {
       var album = (t.album || t.Album || '').toLowerCase();
       if (!filePath && (!title || !artist)) return;
       var key = filePath ? 'path::' + stripFileUrl(filePath) : 'meta::' + title + '::' + artist + '::' + album;
-      if (!playlistMembership.has(key)) playlistMembership.set(key, []);
-      playlistMembership.get(key).push(p);
+      addMember(key, p);
+      var matchedFile = findPlaylistRecordMatch(t);
+      if (matchedFile && matchedFile.filePath) addMember('path::' + stripFileUrl(matchedFile.filePath), p);
     });
   });
   trackRenderState.playlistMembership = playlistMembership;
-  trackRenderState.playlistMembershipRevision = playlistMembershipRevision;
+  trackRenderState.playlistMembershipRevision = membershipRevision;
   return playlistMembership;
 }
 
@@ -1091,6 +1107,22 @@ function getTrackRowFromEventTarget(target) {
   var row = target && target.closest ? target.closest('tr[data-track-index]') : null;
   var tbody = $('tracks-body');
   return row && tbody && row.parentNode === tbody ? row : null;
+}
+function syncRenderedTrackSelection() {
+  $('tracks-body').querySelectorAll('tr[data-track-index]').forEach(function (row) {
+    var track = (trackRenderState.source || [])[Number(row.dataset.trackIndex)];
+    var selected = !!track && selectedTrackKeys.has(getTrackSelectionKey(track));
+    row.classList.toggle('track-selected', selected);
+    row.setAttribute('aria-selected', String(selected));
+  });
+}
+function selectAllVisibleTracks() {
+  selectedTrackKeys.clear();
+  (trackRenderState.rows || []).forEach(function (entry) {
+    selectedTrackKeys.add(getTrackSelectionKey(entry.track));
+  });
+  trackSelectionAnchorKey = trackRenderState.rows.length ? getTrackSelectionKey(trackRenderState.rows[0].track) : '';
+  syncRenderedTrackSelection();
 }
 
 function getTrackFromTableRow(row) {
@@ -1169,16 +1201,33 @@ function handleTrackTableClick(e) {
 
   var row = getTrackRowFromEventTarget(e.target);
   var track = getTrackFromTableRow(row);
-  if (!track || track.isDisabled) return;
+  if (!track) return;
   if (e.target.closest && (e.target.closest('button') || e.target.closest('.track-like-btn') || e.target.closest('.track-in-pl-btn'))) return;
-  if (e.ctrlKey || e.metaKey) {
+  var key = getTrackSelectionKey(track);
+  if (!key) return;
+  if (e.shiftKey) {
     e.preventDefault();
-    var key = getTrackSelectionKey(track);
-    if (!key) return;
-    if (selectedTrackKeys.has(key)) { selectedTrackKeys.delete(key); row.classList.remove('track-selected'); }
-    else { selectedTrackKeys.add(key); row.classList.add('track-selected'); }
-  } else if (selectedTrackKeys.size) {
-    clearTrackSelection();
+    var entries = trackRenderState.rows || [];
+    var anchor = entries.findIndex(function (entry) { return getTrackSelectionKey(entry.track) === trackSelectionAnchorKey; });
+    var end = entries.findIndex(function (entry) { return entry.sourceIndex === Number(row.dataset.trackIndex); });
+    if (anchor < 0) anchor = end;
+    if (!(e.ctrlKey || e.metaKey)) selectedTrackKeys.clear();
+    for (var i = Math.min(anchor, end); i <= Math.max(anchor, end); i++) {
+      if (entries[i] && true) selectedTrackKeys.add(getTrackSelectionKey(entries[i].track));
+    }
+    if (!trackSelectionAnchorKey) trackSelectionAnchorKey = key;
+    syncRenderedTrackSelection();
+  } else if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    if (selectedTrackKeys.has(key)) selectedTrackKeys.delete(key);
+    else selectedTrackKeys.add(key);
+    trackSelectionAnchorKey = key;
+    syncRenderedTrackSelection();
+  } else {
+    selectedTrackKeys.clear();
+    selectedTrackKeys.add(key);
+    trackSelectionAnchorKey = key;
+    syncRenderedTrackSelection();
   }
 }
 
@@ -1186,7 +1235,8 @@ function handleTrackTableDblClick(e) {
   if (e.target.closest && (e.target.closest('button') || e.target.closest('.track-like-btn') || e.target.closest('.track-in-pl-btn'))) return;
   var row = getTrackRowFromEventTarget(e.target);
   var track = getTrackFromTableRow(row);
-  if (!track || track.isDisabled) return;
+  if (!track) return;
+  if (track.isDisabled) { findMissingPlaylistTrack(track, true); return; }
   initAudioCtx();
   state.playQueueTracks = (trackRenderState.source || state.currentTracks).slice();
   moveTrackToShuffleQueueStart(track);
@@ -1209,6 +1259,7 @@ function handleTrackTableKeyDown(e) {
   var row = getTrackRowFromEventTarget(e.target);
   var track = getTrackFromTableRow(row);
   if (!row || !track) return;
+  if(e.key==='Enter' && track.isDisabled) { e.preventDefault(); findMissingPlaylistTrack(track,true); return; }
   if (e.altKey && trackRenderState.allowReorder && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     e.preventDefault();
     var fromIndex = parseInt(row.dataset.trackIndex, 10);
@@ -1245,7 +1296,8 @@ function handleTrackTableKeyDown(e) {
     var step = e.key === 'ArrowDown' ? 1 : -1;
     for (var nextIndex = entryIndex + step; entryIndex >= 0 && nextIndex >= 0 && nextIndex < entries.length; nextIndex += step) {
       var nextEntry = entries[nextIndex];
-      if (nextEntry && nextEntry.track && !nextEntry.track.isDisabled) {
+      if (nextEntry && nextEntry.track) {
+        if (e.shiftKey) { var currentKey=getTrackSelectionKey(track); if(!trackSelectionAnchorKey) trackSelectionAnchorKey=currentKey; var anchor=entries.findIndex(function(entry) { return getTrackSelectionKey(entry.track)===trackSelectionAnchorKey; }); selectedTrackKeys.clear(); entries.slice(Math.min(anchor,nextIndex),Math.max(anchor,nextIndex)+1).forEach(function(entry) { selectedTrackKeys.add(getTrackSelectionKey(entry.track)); }); syncRenderedTrackSelection(); }
         focusTrackTableRowBySourceIndex(nextEntry.sourceIndex);
         break;
       }
@@ -1256,8 +1308,10 @@ function handleTrackTableKeyDown(e) {
 function handleTrackTableDragStart(e) {
   var row = getTrackRowFromEventTarget(e.target);
   var track = getTrackFromTableRow(row);
-  if (!track || track.isDisabled || !e.dataTransfer) { e.preventDefault(); return; }
+  if (!track || !e.dataTransfer) { e.preventDefault(); return; }
   e.dataTransfer.setData('text/plain', JSON.stringify({ title: track.title, artist: track.artist, album: track.album, filePath: track.matchedFile ? track.matchedFile.filePath : '', sourcePlaylistId: getValidSourcePlaylistId(track.sourcePlaylistId) }));
+  var dragged = selectedTrackKeys.has(getTrackSelectionKey(track)) ? getSelectedCurrentTracks() : [track];
+  e.dataTransfer.setData('application/x-playerinyo-tracks',JSON.stringify(dragged.map(makePlaylistTrackRecord)));
   if (trackRenderState.allowReorder) e.dataTransfer.setData('reorder-index', row.dataset.trackIndex);
   row.style.opacity = '0.5';
 }
@@ -1293,16 +1347,27 @@ async function handleTrackTableDrop(e) {
   if (!pl) return;
   var previousTracks = pl.tracks.slice();
   var previousSort = pl.sortBy;
-  var moved = pl.tracks.splice(fromIndex, 1)[0];
-  pl.tracks.splice(toIndex, 0, moved);
+  var snapshot = pushUndoSnapshot('Move playlist tracks', ['playlists']);
+  if (!snapshot) { showToast('Could not prepare Undo. Nothing was moved.'); return; }
+  var dragged = state.currentTracks[fromIndex];
+  var selected = dragged && selectedTrackKeys.has(getTrackSelectionKey(dragged)) ? getSelectedCurrentTracks().map(function(t) { return t.csvRecord; }) : [pl.tracks[fromIndex]];
+  var moving = previousTracks.filter(function(r) { return selected.includes(r); });
+  var boundary=toIndex+(e.clientY > row.getBoundingClientRect().top+row.getBoundingClientRect().height/2 ? 1 : 0);
+  var insertion = previousTracks.slice(0,boundary).filter(function(r) { return !selected.includes(r); }).length;
+  pl.tracks = previousTracks.filter(function(r) { return !selected.includes(r); });
+  pl.tracks.splice.apply(pl.tracks,[insertion,0].concat(moving));
   pl.sortBy = 'Custom Order';
   var mutatedTracks = pl.tracks.slice();
   try { await persistPlaylists(state.playlists); }
   catch (e) {
     var unchangedSinceMutation = pl.tracks.length === mutatedTracks.length && pl.tracks.every(function (track, index) { return track === mutatedTracks[index]; });
     if (unchangedSinceMutation) { pl.tracks = previousTracks; pl.sortBy = previousSort; }
+    discardUndoSnapshot(snapshot); showToast('Could not save playlist order.');
+    if (state.currentView === pl.id) renderPlaylist(pl.id);
+    return;
   }
-  renderPlaylist(state.currentView);
+  if (state.currentView === pl.id) renderPlaylist(pl.id);
+  showUndoToast('Moved ' + moving.length + ' tracks.', snapshot);
 }
 
 function ensureTrackTableDelegation(tbody) {
@@ -1331,7 +1396,8 @@ function appendVirtualTrackTableRow(fragment, entry) {
   if (track.matchedFile && track.matchedFile.filePath) tr.dataset.filePath = stripFileUrl(track.matchedFile.filePath) || track.matchedFile.filePath;
   var selectionKey = getTrackSelectionKey(track);
   if (selectionKey && selectedTrackKeys.has(selectionKey)) tr.classList.add('track-selected');
-  if (track.isDisabled) { tr.classList.add('disabled'); tr.setAttribute('aria-disabled', 'true'); }
+  tr.setAttribute('aria-selected', String(tr.classList.contains('track-selected')));
+  if (track.isDisabled) { tr.classList.add('disabled'); tr.tabIndex=0; tr.draggable=true; }
   else { tr.style.cursor = 'pointer'; tr.draggable = true; tr.tabIndex = 0; }
   if (state.currentPlayingTrack && state.currentPlayingTrack.matchedFile && track.matchedFile && state.currentPlayingTrack.matchedFile.filePath === track.matchedFile.filePath) tr.classList.add('playing');
   var lazy = appSettings.lazyLoading ? ' loading="lazy"' : '';
@@ -1344,7 +1410,7 @@ function appendVirtualTrackTableRow(fragment, entry) {
   var streamIndicator = streamOnly ? '<span class="track-stream-indicator" role="img" aria-label="Streamed from Radio — not downloaded" title="Streamed from Radio — not downloaded"><i class="ph ph-broadcast" aria-hidden="true"></i></span>' : '';
   tr.innerHTML = '<td style="width:20px;padding-left:8px;"></td>'
     + '<td class="col-num">' + (sourceIndex + 1) + '</td>'
-    + '<td class="col-title"><div class="track-info">' + pic + '<div class="track-text"><div class="title">' + esc(track.title) + streamIndicator + '<button type="button" class="track-inline-action track-like-btn" data-fp="' + esc(fp) + '" aria-label="' + (liked ? 'Unlike' : 'Like') + ' track" aria-pressed="' + (liked ? 'true' : 'false') + '"><i class="' + (liked ? 'ph-fill ph-heart' : 'ph ph-heart') + '" aria-hidden="true"></i></button>' + (inPlaylists.length > 0 ? '<button type="button" class="track-inline-action track-in-pl-btn" aria-label="Show playlists containing this track"><i class="ph-fill ph-check-circle" aria-hidden="true"></i></button>' : '') + '</div><div class="artist">' + esc(track.artist) + '</div></div></div></td>'
+    + '<td class="col-title"><div class="track-info">' + pic + '<div class="track-text"><div class="title">' + '<span class="track-title-text" title="' + esc(track.title) + '">' + esc(track.title) + '</span><span class="track-title-actions">' + streamIndicator + '<button type="button" class="track-inline-action track-like-btn" data-fp="' + esc(fp) + '" aria-label="' + (liked ? 'Unlike' : 'Like') + ' track" aria-pressed="' + (liked ? 'true' : 'false') + '"><i class="' + (liked ? 'ph-fill ph-heart' : 'ph ph-heart') + '" aria-hidden="true"></i></button>' + (inPlaylists.length > 0 ? '<button type="button" class="track-inline-action track-in-pl-btn" aria-label="Show playlists containing this track"><i class="ph-fill ph-check-circle" aria-hidden="true"></i></button>' : '') + '</span></div><div class="artist">' + esc(track.artist) + '</div></div></div></td>'
     + '<td class="col-album">' + esc(track.album) + '</td>'
     + '<td class="col-duration">' + fmt(track.duration) + '</td>'
     + '<td style="width:40px;text-align:center;"><button class="icon-btn ghost track-options-btn" aria-label="More actions for ' + esc(track.title || 'track') + '"><i class="ph ph-dots-three" aria-hidden="true"></i></button></td>';
@@ -1362,6 +1428,7 @@ function appendVirtualTrackSpacer(fragment, height) {
 }
 
 function renderTracksTable(allowReorder) {
+  var progress=$('missing-playlist-search-status'); if(progress) progress.hidden=state.currentView !== progress.dataset.sourcePlaylist;
   var tbody = $('tracks-body');
   if (!tbody) return;
   ensureTrackTableDelegation(tbody);
@@ -1386,7 +1453,7 @@ function renderTracksTable(allowReorder) {
   trackRenderState.index = 0;
   trackRenderState.chunk = appSettings.virtualScrolling ? 60 : 80;
   trackRenderState.renderAll = !appSettings.virtualScrolling;
-  trackRenderState.allowReorder = allowReorder;
+  trackRenderState.allowReorder = allowReorder && !filterValue && !(trackRenderState.statusView===state.currentView && trackRenderState.genreFilter) && (!trackRenderState.statusFilter || trackRenderState.statusFilter === 'all' || trackRenderState.statusView !== state.currentView);
   trackRenderState.likedSongsSet = new Set(state.likedSongs);
   trackRenderState.playlistMembership = buildPlaylistMembershipMap();
   trackRenderState.hasMultipleDiscs = !!(state.currentView && state.currentView.startsWith('album:') && albumHasMultipleDiscs(state.currentTracks));
@@ -1424,6 +1491,7 @@ function renderTracksTable(allowReorder) {
       rows.slice(start, end).forEach(function(entry) { appendVirtualTrackTableRow(fragment, entry); });
       appendVirtualTrackSpacer(fragment, (rows.length - end) * TRACK_TABLE_VIRTUAL_ROW_HEIGHT);
       tableBody.replaceChildren(fragment);
+      renderMissingPlaylistRowStates();
     };
     renderVirtualTracksWindow(true);
     return;
@@ -1452,7 +1520,8 @@ function renderTracksTable(allowReorder) {
         if (track.matchedFile && track.matchedFile.filePath) tr.dataset.filePath = stripFileUrl(track.matchedFile.filePath) || track.matchedFile.filePath;
         var selectionKey = getTrackSelectionKey(track);
         if (selectionKey && selectedTrackKeys.has(selectionKey)) tr.classList.add('track-selected');
-        if (track.isDisabled) { tr.classList.add('disabled'); tr.setAttribute('aria-disabled', 'true'); }
+        tr.setAttribute('aria-selected', String(tr.classList.contains('track-selected')));
+        if (track.isDisabled) { tr.classList.add('disabled'); tr.tabIndex=0; tr.draggable=true; }
         else { tr.style.cursor = 'pointer'; tr.draggable = true; tr.tabIndex = 0; }
         if (state.currentPlayingTrack && state.currentPlayingTrack.matchedFile && track.matchedFile && state.currentPlayingTrack.matchedFile.filePath === track.matchedFile.filePath) tr.classList.add('playing');
         var lazy = appSettings.lazyLoading ? ' loading="lazy"' : '';
@@ -1477,7 +1546,7 @@ function renderTracksTable(allowReorder) {
         var displayNo = state.currentView && state.currentView.startsWith('album:') && track.matchedFile && track.matchedFile.trackNo ? track.matchedFile.trackNo : (sourceIndex + 1);
         tr.innerHTML = '<td style="width:20px;padding-left:8px;">' + (trackRenderState.allowReorder ? '<i class="ph ph-dots-six-vertical drag-handle"></i>' : '') + '</td>'
           + '<td class="col-num">' + displayNo + '</td>'
-          + '<td class="col-title"><div class="track-info">' + pic + '<div class="track-text"><div class="title">' + esc(track.title) + streamIndicator + '<button type="button" class="track-inline-action track-like-btn" data-fp="' + esc(fp) + '" aria-label="' + (liked ? 'Unlike' : 'Like') + ' track" aria-pressed="' + (liked ? 'true' : 'false') + '"><i class="' + (liked ? 'ph-fill ph-heart' : 'ph ph-heart') + '" aria-hidden="true"></i></button>' + (inPlaylists.length > 0 ? '<button type="button" class="track-inline-action track-in-pl-btn" aria-label="Show playlists containing this track"><i class="ph-fill ph-check-circle" aria-hidden="true"></i></button>' : '') + '</div><div class="artist">' + esc(track.artist) + '</div></div></div></td>'
+          + '<td class="col-title"><div class="track-info">' + pic + '<div class="track-text"><div class="title">' + '<span class="track-title-text" title="' + esc(track.title) + '">' + esc(track.title) + '</span><span class="track-title-actions">' + streamIndicator + '<button type="button" class="track-inline-action track-like-btn" data-fp="' + esc(fp) + '" aria-label="' + (liked ? 'Unlike' : 'Like') + ' track" aria-pressed="' + (liked ? 'true' : 'false') + '"><i class="' + (liked ? 'ph-fill ph-heart' : 'ph ph-heart') + '" aria-hidden="true"></i></button>' + (inPlaylists.length > 0 ? '<button type="button" class="track-inline-action track-in-pl-btn" aria-label="Show playlists containing this track"><i class="ph-fill ph-check-circle" aria-hidden="true"></i></button>' : '') + '</span></div><div class="artist">' + esc(track.artist) + '</div></div></div></td>'
           + '<td class="col-album">' + esc(track.album) + '</td>'
           + '<td class="col-duration">' + fmt(track.duration) + '</td>'
           + '<td style="width:40px;text-align:center;"><button class="icon-btn ghost track-options-btn" aria-label="More actions for ' + esc(track.title || 'track') + '"><i class="ph ph-dots-three" aria-hidden="true"></i></button></td>';
@@ -1485,6 +1554,7 @@ function renderTracksTable(allowReorder) {
       });
       if (activeToken !== trackRenderState.token) return;
       tbody.appendChild(fragment);
+      renderMissingPlaylistRowStates();
       trackRenderState.index += trackRenderState.chunk;
       if (trackRenderState.index < rows.length) {
         trackRenderState.frame = requestAnimationFrame(function () {
@@ -1657,6 +1727,7 @@ function toLightTrackRef(t) {
   if (t.playback && t.playback.kind === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(t.playback.videoId || '')) {
     ref.playback = { kind: 'youtube', videoId: t.playback.videoId };
     ref.resolvedSource = 'youtube'; ref.playbackSource = 'youtube';
+    if (typeof t.artwork === 'string' && isAllowedRemoteArtwork(t.artwork)) ref.artwork = t.artwork;
   }
   var sourcePlaylistId = getValidSourcePlaylistId(t.sourcePlaylistId);
   if (sourcePlaylistId) ref.sourcePlaylistId = sourcePlaylistId;
@@ -1671,7 +1742,7 @@ function hydrateTrackRef(ref) {
   var f = fp ? (idx.byPath.get(fp) || idx.byStrippedPath.get(stripFileUrl(fp))) : null;
   var sourceRadio = normalizeSourceRadio(ref.sourceRadio);
   if (ref.playback && ref.playback.kind === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(ref.playback.videoId || '')) {
-    return { candidateId: typeof ref.candidateId === 'string' && ref.candidateId ? ref.candidateId : undefined, trackMbid: typeof ref.trackMbid === 'string' ? ref.trackMbid : '', title: ref.title || 'Unknown Track', artist: ref.artist || 'Unknown Artist', album: ref.album || '', duration: Number(ref.duration) || 0, playback: { kind: 'youtube', videoId: ref.playback.videoId }, resolvedSource: 'youtube', playbackSource: 'youtube', isDisabled: false, queueEntryId: typeof ref.queueEntryId === 'string' && ref.queueEntryId ? ref.queueEntryId : createQueueEntryId(), sourcePlaylistId: getValidSourcePlaylistId(ref.sourcePlaylistId), sourceRadio: sourceRadio };
+    return { candidateId: typeof ref.candidateId === 'string' && ref.candidateId ? ref.candidateId : undefined, trackMbid: typeof ref.trackMbid === 'string' ? ref.trackMbid : '', title: ref.title || 'Unknown Track', artist: ref.artist || 'Unknown Artist', album: ref.album || '', artwork: isAllowedRemoteArtwork(ref.artwork) ? ref.artwork : '', duration: Number(ref.duration) || 0, playback: { kind: 'youtube', videoId: ref.playback.videoId }, resolvedSource: 'youtube', playbackSource: 'youtube', isDisabled: false, queueEntryId: typeof ref.queueEntryId === 'string' && ref.queueEntryId ? ref.queueEntryId : createQueueEntryId(), sourcePlaylistId: getValidSourcePlaylistId(ref.sourcePlaylistId), sourceRadio: sourceRadio };
   }
   if (f) return { matchedFile: f, title: f.title || ref.title, artist: f.artist || ref.artist, album: f.album || ref.album, duration: f.duration || ref.duration, isDisabled: false, queueEntryId: typeof ref.queueEntryId === 'string' && ref.queueEntryId ? ref.queueEntryId : createQueueEntryId(), sourcePlaylistId: getValidSourcePlaylistId(ref.sourcePlaylistId), sourceRadio: sourceRadio };
   if (ref.matchedFile) return ensureQueueEntryId(ref); // old full-object format, file no longer in library index
@@ -1774,6 +1845,7 @@ function syncPlaybackStateUi() {
   if (isFullscreenQueueOpen()) renderFullscreenQueue({ preserveScroll: true });
 }
 function initLibraryControls() {
+  document.addEventListener('pointerdown', handleTrackSelectionOutsidePointerDown, true);
   if (window.api.onMovedFilesProgress) window.api.onMovedFilesProgress(function (data) {
     if (movedFileOperation === 'preview') {
       setTagHealthProgress(true, data && data.label || 'Scanning moved files', data && data.current || 0, data && data.total || 0, '');
@@ -1796,4 +1868,10 @@ function initLibraryControls() {
   if (movedFilesModal) movedFilesModal.addEventListener('click', function (event) { if (event.target === movedFilesModal) cancelMovedFileReview(); });
   bindPlaylistSortControl();
   bindLibrarySortControl();
+}
+
+function handleTrackSelectionOutsidePointerDown(event) {
+  if (!selectedTrackKeys.size || event.button !== 0 || modalStack.length) return;
+  if (event.target && event.target.closest && event.target.closest('#tracks-body tr[data-track-index], .context-menu, .modal-overlay')) return;
+  clearTrackSelection();
 }

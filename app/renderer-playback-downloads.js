@@ -96,6 +96,7 @@ function waitForRadioAudioReady(audioEl, generation) {
 }
 async function prepareRemoteTrackInSlot(track, audioIndex, generation) {
   if (!isRemotePlaybackTrack(track) || !playbackResolver || !audioEls || !audioEls[audioIndex]) return false;
+  ensureQueueEntryId(track);
   if (isPreparedRadioTrack(track, audioIndex)) return true;
   var key = getRemotePreparationKey(track, audioIndex, generation);
   if (!remotePreparationInFlight) return prepareRemoteTrackInSlotOwned(track, audioIndex, generation, key);
@@ -159,6 +160,7 @@ function prepareNextRadioTrack() {
 async function playTrack(track, options) {
   options = options || {};
   if (!track || (!track.matchedFile && !isRemotePlaybackTrack(track))) return false;
+  ensureQueueEntryId(track);
   var radioSessionToClose = state.radioSession && track.radioSessionId !== state.radioSession.stationId && !options.preserveRadioSession ? state.radioSession : null;
   if (track.matchedFile && metadataPathIsLocked(track.matchedFile.filePath)) { showToast('Wait for metadata writing to finish for this track.'); return false; }
   var generation = ++playbackGeneration;
@@ -886,6 +888,7 @@ function updatePlayerUI() {
     return;
   }
   var t = state.currentPlayingTrack;
+  primeRemoteArtwork(t);
   var liked = isTrackLiked(t);
   var picture = getTrackArtworkUrl(t);
   cover.classList.toggle('placeholder', !picture);
@@ -895,10 +898,11 @@ function updatePlayerUI() {
   artist.textContent = t.artist || 'Unknown artist';
   album.textContent = t.album || '';
   var navigationAlbum = resolvePlaybackTrackAlbum(t);
-  title.disabled = !navigationAlbum;
-  title.title = navigationAlbum ? ('Open ' + navigationAlbum.name) : '';
+  var canFindAlbum = !!navigationAlbum || (isRemotePlaybackTrack(t) && !!t.title && isSearchablePlaybackArtist(t.artist));
+  title.disabled = !canFindAlbum;
+  title.title = navigationAlbum ? ('Open ' + navigationAlbum.name) : (canFindAlbum ? 'Find album' : '');
   artist.disabled = !isSearchablePlaybackArtist(t.artist);
-  artist.title = artist.disabled ? '' : ('Search for ' + t.artist);
+  artist.title = artist.disabled ? '' : ('Open ' + t.artist + (isLibraryPlaybackTrack(t) ? ' in your library' : ' online'));
   if (artworkTrigger) {
     artworkTrigger.disabled = !picture;
     artworkTrigger.title = picture ? 'Open artwork' : '';
@@ -910,6 +914,19 @@ function updatePlayerUI() {
   updateReplayGainStatus(t);
   syncTransportControls();
   syncMpris(false);
+}
+
+function primeRemoteArtwork(track) {
+  if (!isRemotePlaybackTrack(track) || track._artworkCacheRequested || !window.api.cacheYouTubeArtwork) return;
+  track._artworkCacheRequested = true;
+  window.api.cacheYouTubeArtwork(track.playback.videoId, isAllowedRemoteArtwork(track.artwork) ? track.artwork : '').then(function (url) {
+    if (!url) return;
+    track._cachedArtwork = url;
+    if (state.currentPlayingTrack === track) {
+      updatePlayerUI();
+      if (npOverlayOpen) updateNowPlayingOverlay();
+    }
+  }).catch(function () { /* The remote artwork URL remains available. */ });
 }
 
 function getStudioSourcePlaylist() {
@@ -939,32 +956,42 @@ function resolvePlaybackTrackAlbum(track) {
   if (track.matchedFile) return getFullAlbumByKey(getAlbumKey(track.matchedFile));
   var album = String(track.album || '').trim();
   var albumArtist = String(track.albumArtist || track.artist || '').trim();
-  if (!album || !albumArtist) return null;
-  return getFullAlbumByKey(getAlbumKey({ album: album, albumArtist: albumArtist, artist: track.artist || albumArtist }));
+  if (album && albumArtist) {
+    var direct = getFullAlbumByKey(getAlbumKey({ album: album, albumArtist: albumArtist, artist: track.artist || albumArtist }));
+    if (direct) return direct;
+  }
+  var match = state.musicFiles.find(function (file) { return artistCatalogKey(file.title) === artistCatalogKey(track.title) && artistCatalogKey(file.artist) === artistCatalogKey(track.artist) && (!album || artistCatalogKey(file.album) === artistCatalogKey(album)); });
+  return match ? getFullAlbumByKey(getAlbumKey(match)) : null;
 }
 
 function isSearchablePlaybackArtist(value) {
   var artist = String(value || '').trim();
   return !!artist && !/^(unknown\s+artist|unknown|—|-|n\/a)$/i.test(artist);
 }
-
-function openPlaybackTrackAlbum() {
-  var album = resolvePlaybackTrackAlbum(state.currentPlayingTrack);
-  if (!album) return;
-  if (npOverlayOpen) closeNowPlayingOverlay();
-  pushNav('album:' + album.id);
-  renderAlbumDetail(album, state.currentPlayingTrack && state.currentPlayingTrack.matchedFile && state.currentPlayingTrack.matchedFile.filePath);
+function isLibraryPlaybackTrack(track) {
+  return !!(track && !isRemotePlaybackTrack(track) && (track.matchedFile || track.playback && track.playback.kind === 'local-file' || track.resolvedSource === 'local'));
 }
 
-function searchPlaybackArtist() {
-  var artist = state.currentPlayingTrack && String(state.currentPlayingTrack.artist || '').trim();
+async function openPlaybackTrackAlbum() {
+  var track = state.currentPlayingTrack;
+  var album = resolvePlaybackTrackAlbum(track);
+  if (npOverlayOpen) closeNowPlayingOverlay();
+  if (album) {
+    pushNav('album:' + album.id);
+    renderAlbumDetail(album, track && track.matchedFile && track.matchedFile.filePath);
+  } else if (isRemotePlaybackTrack(track)) await openCatalogAlbumForTrack(track);
+}
+
+async function searchPlaybackArtist() {
+  var track = state.currentPlayingTrack;
+  var artist = track && String(track.artist || '').trim();
   if (!isSearchablePlaybackArtist(artist)) return;
   if (npOverlayOpen) closeNowPlayingOverlay();
-  var search = $('global-search');
-  if (!search) return;
-  search.value = artist;
-  search.dispatchEvent(new Event('input', { bubbles: true }));
-  setTimeout(function () { if (!modalStack.length) search.focus(); }, 0);
+  if (isLibraryPlaybackTrack(track)) {
+    openLibraryArtistProfile(artist);
+    return;
+  }
+  await openArtistProfileByName(artist);
 }
 
 function openArtworkLightbox(source, label) {
@@ -1025,7 +1052,9 @@ function updateReplayGainStatus(track) {
 function openPlaylistContextMenu(pl, x, y, opener) {
   currentContextMenuPlaylist = pl;
   var exportOnly = !!(pl && pl.isSpecial);
+  var dup = $('pctx-find-duplicates'); if (!dup) { dup=document.createElement('button'); dup.id='pctx-find-duplicates'; dup.className='menu-item'; dup.textContent='Find duplicates'; $('playlist-context-menu').appendChild(dup); } dup.hidden=exportOnly; dup.onclick=function() { hideAllContextMenus(); reviewPlaylistDuplicates(pl); };
   var menu = $('playlist-context-menu');
+  addPlaylistFolderMenu(pl,menu);
   if (menu) menu.classList.toggle('export-only', exportOnly);
   ['pctx-add-songs', 'pctx-rename', 'pctx-cover', 'pctx-color', 'pctx-pin', 'pctx-sync-albums', 'pctx-match-folder', 'pctx-duplicate', 'pctx-delete'].forEach(function (id) {
     var action = $(id); if (action) action.hidden = exportOnly;
@@ -1396,6 +1425,7 @@ function getDownloadablePlaylistTracksFromContext() {
   return tracks.filter(function (track) { return track && track.csvRecord && isPlaylistImportDownloadEligible(track.csvRecord); });
 }
 function updateTrackContextDownloadState(track) {
+  addMissingPlaylistActions(track);
   var missingPlaylistTrack = !!(track && track.csvRecord && isPlaylistRecordMissing(track.csvRecord));
   var rmBtn = $('ctx-remove-match');
   if (rmBtn) rmBtn.hidden = !(state.currentView.startsWith('pl_') && track && track.matchedFile);

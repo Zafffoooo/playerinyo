@@ -2,6 +2,30 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.8 — 2026-10-30
+
+### Türkçe
+
+- Sanatçı profilleri daha hızlı açılır: albüm, şarkı ve fotoğraf istekleri bağımsız çalışır; ilk 5 albüm önizlenir, Show All kalan albümleri sayfalı yükler.
+- Yerel şarkıdan sanatçıya gitmek In Library görünümünü açar; Explore online ile çevrimiçi kataloğa geçilebilir. Albüm kapağı, şarkıdan albüm bulma ve arama sonuçlarına geri dönüş iyileştirildi.
+- Albüm sürümlerinde şarkı sayıları ve sayıya göre sıralama eklendi; sanatçı fotoğrafı yükleme ve çevrimiçi kapak saklama iyileştirildi.
+- Playlistlere kısa durum/tür filtreleri, toplam süre, Ctrl/Shift ile çoklu seçim, klavyeyle aralık seçimi ve blok taşıma eklendi. Toplu işlemler sağ tık menüsündedir.
+- Eksik şarkıları tek tek veya topluca arama, iptal, yeniden deneme, sürüm seçme ve çevrimiçi eşleşmeyi kaydetme eklendi. Toplu arama oynatma veya indirme başlatmaz.
+- Tek seviyeli playlist klasörleri, sırayı playlist olarak kaydetme, tekrarları inceleme ve sürükleme/yakınlaştırma destekli kapak kırpma eklendi.
+- Uzun şarkı adları tek satırda kısalır; kalp ve playlist ikonları aynı satırda kalır. Seçili satırların alt çizgisi kaldırıldı.
+- Eski beğenilen/playlist şarkılarındaki oynatma tanımı ve eksik sıra kimliği hataları düzeltildi. Link/CSV playlistlerinin yerel şarkı üyelik göstergeleri ve yedekleme uyumluluğu iyileştirildi.
+
+### English
+
+- Artist profiles load faster with independent album, song, and photo requests; preview five albums and load the rest in pages with Show All.
+- Artist links from local playback open an In Library view, with Explore online for the catalog. Improved album navigation, song-to-album lookup, and returning to search results.
+- Added edition track counts and sorting by track count; improved artist photo loading and persisted online artwork.
+- Added compact status/genre filters, total duration, Ctrl/Shift selection, keyboard range selection, and block reordering. Bulk actions live in the context menu.
+- Added on-demand single/batch matching for unavailable tracks, cancellation, retry, version selection, and saved online matches. Batch matching does not start playback or download audio.
+- Added single-level playlist folders, saving the queue as a playlist, duplicate review, and drag/zoom artwork cropping.
+- Long track titles truncate on one line while like and playlist icons stay aligned. Removed selected-row underlines.
+- Fixed invalid playback descriptors and missing queue ownership for saved liked/playlist tracks. Improved local membership indicators for link/CSV imports and backup compatibility.
+
 ## 0.1.7 — 2026-10-26
 
 ### Added

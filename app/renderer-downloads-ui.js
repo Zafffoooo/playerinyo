@@ -1635,11 +1635,11 @@ function initDownloadControls() {
   if (createSmartMixBtn) createSmartMixBtn.addEventListener('click', function () { openRulePlaylistBuilder(); });
   cpDrop = $('cp-cover-drop');
   if (cpDrop) {
-    cpDrop.addEventListener('click', async function () { var img = await window.api.openImage(); if (img) { cpSelectedCoverPath = img; $('cp-cover-preview').src = img; $('cp-cover-preview').style.display = 'block'; } });
+    cpDrop.addEventListener('click', async function () { var cover = await choosePlaylistCover(); if (cover) { cpSelectedCoverPath = cover; $('cp-cover-preview').src = cover; $('cp-cover-preview').style.display = 'block'; } });
     cpDrop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cpDrop.click(); } });
     cpDrop.addEventListener('dragover', function (e) { e.preventDefault(); cpDrop.classList.add('drag-over'); });
     cpDrop.addEventListener('dragleave', function () { cpDrop.classList.remove('drag-over'); });
-    cpDrop.addEventListener('drop', function (e) { e.preventDefault(); cpDrop.classList.remove('drag-over'); var f = e.dataTransfer.files[0]; if (f && f.type.startsWith('image/') && f.path) { var url = toFileUrl(f.path); cpSelectedCoverPath = url; $('cp-cover-preview').src = url; $('cp-cover-preview').style.display = 'block'; } });
+    cpDrop.addEventListener('drop', async function (e) { e.preventDefault(); cpDrop.classList.remove('drag-over'); var f = e.dataTransfer.files[0]; if (f && f.type.startsWith('image/')) { var cover = await cropPlaylistCoverFile(f); if (cover) { cpSelectedCoverPath = cover; $('cp-cover-preview').src = cover; $('cp-cover-preview').style.display = 'block'; } } });
   }
   cpCancel = $('cp-cancel-btn');
   if (cpCancel) cpCancel.addEventListener('click', function () { hideModal($('create-playlist-modal')); });
@@ -1703,30 +1703,23 @@ function initDownloadControls() {
     var scanned = await scanMissingLibraryFiles();
     if (scanned && libraryMissingFilePaths.size) await relinkMissingFilesFromFolder();
   });
+  function renderNavHistoryView(viewId) {
+    if (viewId && viewId.startsWith('album:')) {
+      var album = getFullAlbumByKey(decodeURIComponent(viewId.slice(6))); if (album) renderAlbumDetail(album);
+    } else if (viewId && viewId.startsWith('youtube-search:')) restoreMusicSearch(viewId);
+    else switchView(viewId, false);
+  }
   btnNavBack = $('btn-nav-back');
   if (btnNavBack) btnNavBack.addEventListener('click', function () {
     if (state.navIndex > 0) {
-      state.navIndex--;
-      var viewId = state.navHistory[state.navIndex];
-      // handle album: prefix
-      if (viewId && viewId.startsWith('album:')) {
-        var albumId = decodeURIComponent(viewId.replace('album:', ''));
-        var album = getFullAlbumByKey(albumId);
-        if (album) renderAlbumDetail(album);
-      } else { switchView(viewId, false); }
+      state.navIndex--; renderNavHistoryView(state.navHistory[state.navIndex]);
       updateNavBtns();
     }
   });
   btnNavFwd = $('btn-nav-forward');
   if (btnNavFwd) btnNavFwd.addEventListener('click', function () {
     if (state.navIndex < state.navHistory.length - 1) {
-      state.navIndex++;
-      var viewId = state.navHistory[state.navIndex];
-      if (viewId && viewId.startsWith('album:')) {
-        var albumId = decodeURIComponent(viewId.replace('album:', ''));
-        var album = getFullAlbumByKey(albumId);
-        if (album) renderAlbumDetail(album);
-      } else { switchView(viewId, false); }
+      state.navIndex++; renderNavHistoryView(state.navHistory[state.navIndex]);
       updateNavBtns();
     }
   });
@@ -1744,11 +1737,20 @@ function initDownloadControls() {
     state.currentView = 'search';
     setViewKind('search');
   }
-  async function submitMusicSearch() {
+  function restoreMusicSearch(viewId) {
+    if (!gSearch || !searchSource) return;
+    searchSource.value = 'youtube-music';
+    searchSource.dispatchEvent(new Event('change'));
+    gSearch.value = decodeURIComponent(viewId.slice('youtube-search:'.length));
+    var clear = $('global-search-clear'); if (clear) clear.hidden = !gSearch.value;
+    submitMusicSearch(false);
+  }
+  async function submitMusicSearch(recordHistory = true) {
     if (!gSearch || !musicResults || !window.api.searchYouTubeMusic) return;
     var query = gSearch.value.trim();
     var searchStartedAt = performance.now();
     var sequence = ++musicSearchSequence;
+    if (recordHistory && query.length >= 2) pushNav('youtube-search:' + encodeURIComponent(query));
     showMusicSearchView();
     musicResults.replaceChildren();
     var artistMatches = document.createElement('section');
@@ -1796,12 +1798,16 @@ function initDownloadControls() {
       }
       status.textContent = result.songs.length ? result.songs.length + ' songs · Choose a version to play.' : 'No matching songs found.';
       result.songs.forEach(function (song) {
-        var track = { candidateId: 'youtube-music:' + song.videoId, queueEntryId: createQueueEntryId(), title: song.title, artist: song.artist, album: '', duration: song.duration, artwork: song.artwork || '', playback: { kind: 'youtube', videoId: song.videoId } };
+        var track = { candidateId: 'youtube-music:' + song.videoId, queueEntryId: createQueueEntryId(), title: song.title, artist: song.artist, album: song.album || '', duration: song.duration, artwork: song.artwork || '', playback: { kind: 'youtube', videoId: song.videoId } };
         var row = document.createElement('div'); row.className = 'youtube-music-row'; row.dataset.videoId = song.videoId;
         var cover = document.createElement('img'); cover.className = 'youtube-music-row-cover'; cover.alt = ''; cover.loading = 'lazy'; cover.src = song.artwork || ('https://i.ytimg.com/vi/' + song.videoId + '/hqdefault.jpg'); row.appendChild(cover);
         var details = document.createElement('div'); details.className = 'youtube-music-row-details';
-        var title = document.createElement('strong'); title.textContent = song.title;
-        var meta = document.createElement('span'); meta.textContent = [song.artist || 'Unknown Artist', song.duration ? (Math.floor(song.duration / 60) + ':' + String(Math.floor(song.duration % 60)).padStart(2, '0')) : '—', 'YouTube Music'].join(' · ');
+        var title = document.createElement('button'); title.type = 'button'; title.className = 'youtube-music-metadata-link'; title.textContent = song.title; title.title = 'Find album';
+        title.addEventListener('click', function () { openAlbumForTrack(track); });
+        var meta = document.createElement('span');
+        var artistLink = document.createElement('button'); artistLink.type = 'button'; artistLink.className = 'youtube-music-metadata-link'; artistLink.textContent = song.artist || 'Unknown Artist'; artistLink.title = 'Open artist profile';
+        artistLink.addEventListener('click', function () { openArtistProfileByName(song.artist); });
+        meta.append(artistLink, document.createTextNode(' · ' + (song.duration ? (Math.floor(song.duration / 60) + ':' + String(Math.floor(song.duration % 60)).padStart(2, '0')) : '—') + ' · YouTube Music'));
         var rowStatus = document.createElement('span'); rowStatus.className = 'youtube-music-row-status'; rowStatus.setAttribute('role', 'status'); rowStatus.setAttribute('aria-live', 'polite');
         details.append(title, meta, rowStatus); row.appendChild(details);
         var playButton;

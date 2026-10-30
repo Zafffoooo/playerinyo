@@ -757,8 +757,8 @@ function updateNowPlayingOverlay() {
     if (titleEl) titleEl.textContent = track.title || '';
     if (artistEl) artistEl.textContent = track.artist || '';
     if (albumEl) albumEl.textContent = track.album || '';
-    if (titleEl) titleEl.disabled = !resolvePlaybackTrackAlbum(track);
-    if (artistEl) artistEl.disabled = !isSearchablePlaybackArtist(track.artist);
+    if (titleEl) titleEl.disabled = !resolvePlaybackTrackAlbum(track) && !(isRemotePlaybackTrack(track) && !!track.title && isSearchablePlaybackArtist(track.artist));
+    if (artistEl) { artistEl.disabled = !isSearchablePlaybackArtist(track.artist); artistEl.title = artistEl.disabled ? '' : ('Open ' + track.artist + (isLibraryPlaybackTrack(track) ? ' in your library' : ' online')); }
     if (artWrap) artWrap.tabIndex = pic ? 0 : -1;
   } else {
     updateNPArtworkGradient('', artEl);
@@ -1026,14 +1026,17 @@ function bindPlaylistTrackDropTarget(element, playlist) {
     if (!element.contains(event.relatedTarget)) element.classList.remove('playlist-drop-target');
   });
   element.addEventListener('drop', async function (event) {
+    if (event.dataTransfer && Array.from(event.dataTransfer.types || []).includes('application/x-playerinyo-playlist')) return;
     event.preventDefault();
     event.stopPropagation();
     element.classList.remove('playlist-drop-target');
     var track = readDroppedTrack(event.dataTransfer);
     if (!track) { showToast('Could not read the dropped track. Drag it from a Playerinyo track list.'); return; }
     try {
-      var addedCount = await addTracksToPlaylist(playlist, [track]);
-      if (addedCount) showToast('Added "' + track.title + '" to "' + playlist.name + '".');
+      var records; try { records=JSON.parse(event.dataTransfer.getData('application/x-playerinyo-tracks') || 'null'); } catch(_) { records=null; }
+      var tracks=Array.isArray(records) ? records.map(function(r) { return playlistRecordToPlaybackTrack(r,playlist.id); }) : [track];
+      var addedCount = await addTracksToPlaylist(playlist, tracks);
+      if (addedCount) showToast('Added ' + addedCount + ' tracks to "' + playlist.name + '".');
       else showToast('"' + track.title + '" is already in "' + playlist.name + '".');
     } catch (error) {
       showToast('Could not add "' + track.title + '" to "' + playlist.name + '". The playlist was restored.');
@@ -1772,7 +1775,7 @@ function initSettingsControls() {
   ctxAddQueue = $('ctx-add-queue');
   if (ctxAddQueue) ctxAddQueue.addEventListener('click', function () {
     if (currentContextMenuTrack) {
-      state.userQueue.push(makeManualQueueEntry(currentContextMenuTrack));
+      getTracksFromTrackContextForPlaylistAdd().filter(function(t) { return !t.isDisabled; }).forEach(function(t) { state.userQueue.push(makeManualQueueEntry(t)); });
       syncSavedQueuePaths();
       saveSettingsDebounced(300);
       if (isQueueOpen) renderQueue();
