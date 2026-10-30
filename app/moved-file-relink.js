@@ -35,115 +35,130 @@ function normalizedFilename(file) {
   return path.basename(String((file && (file.filePath || file.filename)) || '')).toLowerCase();
 }
 
-function normalizedStem(file) {
+const pathCollator = new Intl.Collator();
+
+// Normalized fields are computed once per record instead of once per scored pair.
+function describeFile(file) {
+  const filePath = file && file.filePath;
   const filename = normalizedFilename(file);
-  return normalizedText(filename.slice(0, filename.length - path.extname(filename).length));
+  const extension = path.extname(filename).toLowerCase();
+  const stemBase = filename.slice(0, filename.length - path.extname(filename).length);
+  let parts = null;
+  let canonical = null;
+  return {
+    file,
+    filePath,
+    filename,
+    extension,
+    stem: normalizedText(stemBase),
+    size: Number(file.fileSize || file.size || 0),
+    duration: Number(file.duration || 0),
+    title: normalizedText(file.title),
+    artist: normalizedText(file.artist),
+    album: normalizedText(file.album),
+    get canonical() {
+      if (canonical === null) canonical = canonicalPath(filePath);
+      return canonical;
+    },
+    get parts() {
+      if (parts === null) {
+        parts = path.resolve(filePath).split(path.sep).filter(Boolean);
+        if (process.platform === 'win32') parts = parts.map((part) => part.toLowerCase());
+      }
+      return parts;
+    },
+  };
 }
 
-function sharedSuffixSegments(a, b) {
-  const aParts = path.resolve(a).split(path.sep).filter(Boolean);
-  const bParts = path.resolve(b).split(path.sep).filter(Boolean);
+function suffixSegmentCount(a, b) {
   let count = 0;
-  while (count < aParts.length && count < bParts.length) {
-    const aa = aParts[aParts.length - 1 - count];
-    const bb = bParts[bParts.length - 1 - count];
-    const equal = process.platform === 'win32' ? aa.toLowerCase() === bb.toLowerCase() : aa === bb;
-    if (!equal) break;
-    count++;
-  }
+  while (count < a.length && count < b.length && a[a.length - 1 - count] === b[b.length - 1 - count]) count++;
   return count;
 }
 
-function hasExactRelativeMove(oldPath, newPath, oldRoots, searchRoot) {
-  if (!searchRoot || !Array.isArray(oldRoots)) return false;
-  return oldRoots.some((root) => {
-    if (!root || !isPathWithin(oldPath, root)) return false;
-    const relative = path.relative(path.resolve(root), path.resolve(oldPath));
-    return !!relative && samePath(path.join(searchRoot, relative), newPath);
+// Canonical destinations a missing record would have if its old library root moved to the search root.
+function expectedMovePaths(missing, options) {
+  const expected = new Set();
+  if (!options.searchRoot || !Array.isArray(options.oldRoots)) return expected;
+  options.oldRoots.forEach((root) => {
+    if (!root || !isPathWithin(missing.filePath, root)) return;
+    const relative = path.relative(path.resolve(root), path.resolve(missing.filePath));
+    if (relative) expected.add(canonicalPath(path.join(options.searchRoot, relative)));
   });
+  return expected;
 }
 
-function scoreRelinkCandidate(missing, candidate, options = {}) {
-  const reasons = [];
-  const oldPath = missing && missing.filePath;
-  const newPath = candidate && candidate.filePath;
-  if (!oldPath || !newPath) return { score: -Infinity, reasons };
+function scoreDescribed(m, c, expected, reasons) {
   let score = 0;
-
-  const exactRelativeMove = hasExactRelativeMove(oldPath, newPath, options.oldRoots, options.searchRoot);
-  const suffixSegments = sharedSuffixSegments(oldPath, newPath);
+  const exactRelativeMove = expected.size > 0 && expected.has(c.canonical);
+  const suffixSegments = suffixSegmentCount(m.parts, c.parts);
   if (exactRelativeMove) {
     score += 240;
-    reasons.push('Exact relative path under a moved library root');
+    if (reasons) reasons.push('Exact relative path under a moved library root');
   } else if (suffixSegments >= 4) {
     score += 170;
-    reasons.push('Long relative path suffix matches');
+    if (reasons) reasons.push('Long relative path suffix matches');
   } else if (suffixSegments === 3) {
     score += 145;
-    reasons.push('Album folder and filename match');
+    if (reasons) reasons.push('Album folder and filename match');
   } else if (suffixSegments === 2) {
     score += 115;
-    reasons.push('Parent folder and filename match');
+    if (reasons) reasons.push('Parent folder and filename match');
   }
 
-  const oldFilename = normalizedFilename(missing);
-  const newFilename = normalizedFilename(candidate);
-  if (oldFilename && oldFilename === newFilename) {
+  if (m.filename && m.filename === c.filename) {
     score += 70;
-    reasons.push('Filename matches');
-  } else if (normalizedStem(missing) && normalizedStem(missing) === normalizedStem(candidate)) {
+    if (reasons) reasons.push('Filename matches');
+  } else if (m.stem && m.stem === c.stem) {
     score += 44;
-    reasons.push('Normalized filename matches');
+    if (reasons) reasons.push('Normalized filename matches');
   }
 
-  const oldExtension = path.extname(oldFilename).toLowerCase();
-  const newExtension = path.extname(newFilename).toLowerCase();
-  if (oldExtension && oldExtension === newExtension) {
+  if (m.extension && m.extension === c.extension) {
     score += 10;
-    reasons.push('Extension matches');
-  } else if (oldExtension && newExtension) {
+    if (reasons) reasons.push('Extension matches');
+  } else if (m.extension && c.extension) {
     score -= 24;
   }
 
-  const oldSize = Number(missing.fileSize || missing.size || 0);
-  const newSize = Number(candidate.fileSize || candidate.size || 0);
+  const oldSize = m.size;
+  const newSize = c.size;
   if (oldSize > 0 && newSize > 0) {
     const sizeDelta = Math.abs(oldSize - newSize);
     if (sizeDelta === 0) {
       score += 36;
-      reasons.push('File size matches');
+      if (reasons) reasons.push('File size matches');
     } else if (sizeDelta <= Math.max(2048, oldSize * 0.005)) {
       score += 18;
-      reasons.push('File size is very close');
+      if (reasons) reasons.push('File size is very close');
     } else if (sizeDelta > oldSize * 0.2) {
       score -= 16;
     }
   }
 
-  const tagWeights = [
-    ['title', 55, 'Title matches'],
-    ['artist', 35, 'Artist matches'],
-    ['album', 25, 'Album matches'],
-  ];
-  for (const [field, weight, reason] of tagWeights) {
-    const oldValue = normalizedText(missing[field]);
-    const newValue = normalizedText(candidate[field]);
-    if (oldValue && newValue && oldValue === newValue) {
-      score += weight;
-      reasons.push(reason);
-    }
+  if (m.title && m.title === c.title) {
+    score += 55;
+    if (reasons) reasons.push('Title matches');
+  }
+  if (m.artist && m.artist === c.artist) {
+    score += 35;
+    if (reasons) reasons.push('Artist matches');
+  }
+  if (m.album && m.album === c.album) {
+    score += 25;
+    if (reasons) reasons.push('Album matches');
   }
 
-  const oldDuration = Number(missing.duration || 0);
-  const newDuration = Number(candidate.duration || 0);
+  const oldDuration = m.duration;
+  const newDuration = c.duration;
   if (oldDuration > 0 && newDuration > 0) {
     const durationDelta = Math.abs(oldDuration - newDuration);
     if (durationDelta <= 2) {
       score += 25;
-      reasons.push('Duration matches within 2 seconds');
+      if (reasons) reasons.push('Duration matches within 2 seconds');
     } else if (durationDelta <= 5) {
       score += 14;
-      reasons.push('Duration is close');
+      if (reasons) reasons.push('Duration is close');
     } else if (durationDelta <= 10) {
       score += 5;
     } else {
@@ -151,7 +166,16 @@ function scoreRelinkCandidate(missing, candidate, options = {}) {
     }
   }
 
-  return { score, reasons, suffixSegments, exactRelativeMove };
+  return { score, suffixSegments, exactRelativeMove };
+}
+
+function scoreRelinkCandidate(missing, candidate, options = {}) {
+  const reasons = [];
+  const oldPath = missing && missing.filePath;
+  const newPath = candidate && candidate.filePath;
+  if (!oldPath || !newPath) return { score: -Infinity, reasons };
+  const scored = scoreDescribed(describeFile(missing), describeFile(candidate), expectedMovePaths(missing, options), reasons);
+  return { score: scored.score, reasons, suffixSegments: scored.suffixSegments, exactRelativeMove: scored.exactRelativeMove };
 }
 
 function addToIndex(index, key, value) {
@@ -171,66 +195,167 @@ function confidenceForScore(score) {
   return 'low';
 }
 
+// Binary max-heap over parallel arrays (scores / candidate indexes) for one missing record.
+// Ordering: higher score first, then canonical candidate path, then candidate order (stable).
+function createCandidateHeap(scores, candidateIds, described) {
+  const before = (i, j) => {
+    if (scores[i] !== scores[j]) return scores[i] > scores[j];
+    const a = described[candidateIds[i]].canonical;
+    const b = described[candidateIds[j]].canonical;
+    if (a !== b) {
+      const order = pathCollator.compare(a, b);
+      if (order !== 0) return order < 0;
+    }
+    return candidateIds[i] < candidateIds[j];
+  };
+  const swap = (i, j) => {
+    const score = scores[i]; scores[i] = scores[j]; scores[j] = score;
+    const id = candidateIds[i]; candidateIds[i] = candidateIds[j]; candidateIds[j] = id;
+  };
+  const siftDown = (start) => {
+    let i = start;
+    for (;;) {
+      const left = 2 * i + 1;
+      const right = left + 1;
+      let best = i;
+      if (left < scores.length && before(left, best)) best = left;
+      if (right < scores.length && before(right, best)) best = right;
+      if (best === i) return;
+      swap(i, best);
+      i = best;
+    }
+  };
+  for (let i = (scores.length >> 1) - 1; i >= 0; i--) siftDown(i);
+  return {
+    get size() { return scores.length; },
+    topScore() { return scores[0]; },
+    topId() { return candidateIds[0]; },
+    secondScore() {
+      if (scores.length < 2) return null;
+      if (scores.length === 2) return scores[1];
+      return before(1, 2) ? scores[1] : scores[2];
+    },
+    pop() {
+      const last = scores.length - 1;
+      swap(0, last);
+      scores.pop();
+      candidateIds.pop();
+      siftDown(0);
+    },
+  };
+}
+
 function buildRelinkProposals(missingFiles, candidates, options = {}) {
   missingFiles = Array.isArray(missingFiles) ? missingFiles.filter(Boolean) : [];
   candidates = Array.isArray(candidates) ? candidates.filter((candidate) => candidate && candidate.filePath) : [];
+  const described = candidates.map(describeFile);
   const indexes = {
     filename: new Map(), stem: new Map(), size: new Map(), title: new Map(), titleArtist: new Map(), titleAlbum: new Map(),
   };
-  candidates.forEach((candidate) => {
-    const title = normalizedText(candidate.title);
-    addToIndex(indexes.filename, normalizedFilename(candidate), candidate);
-    addToIndex(indexes.stem, normalizedStem(candidate), candidate);
-    addToIndex(indexes.size, Number(candidate.fileSize || candidate.size || 0), candidate);
-    addToIndex(indexes.title, title, candidate);
-    addToIndex(indexes.titleArtist, title + '::' + normalizedText(candidate.artist), candidate);
-    addToIndex(indexes.titleAlbum, title + '::' + normalizedText(candidate.album), candidate);
-  });
-
   const candidateFilenameCounts = new Map();
-  candidates.forEach((candidate) => addToIndex(candidateFilenameCounts, normalizedFilename(candidate), candidate));
-  const missingFilenameCounts = new Map();
-  missingFiles.forEach((missing) => addToIndex(missingFilenameCounts, normalizedFilename(missing), missing));
-  const rankings = new Map();
-  const allPairs = [];
-
-  missingFiles.forEach((missing) => {
-    const shortlist = new Set();
-    const title = normalizedText(missing.title);
-    addIndexedValues(shortlist, indexes.filename, normalizedFilename(missing));
-    addIndexedValues(shortlist, indexes.stem, normalizedStem(missing));
-    addIndexedValues(shortlist, indexes.size, Number(missing.fileSize || missing.size || 0));
-    addIndexedValues(shortlist, indexes.title, title);
-    addIndexedValues(shortlist, indexes.titleArtist, title + '::' + normalizedText(missing.artist));
-    addIndexedValues(shortlist, indexes.titleAlbum, title + '::' + normalizedText(missing.album));
-    const ranked = Array.from(shortlist).map((candidate) => {
-      const scored = scoreRelinkCandidate(missing, candidate, options);
-      return { missing, candidate, ...scored };
-    }).filter((entry) => entry.score >= 45).sort((a, b) => b.score - a.score || canonicalPath(a.candidate.filePath).localeCompare(canonicalPath(b.candidate.filePath)));
-    rankings.set(missing, ranked);
-    ranked.forEach((entry) => allPairs.push(entry));
+  described.forEach((candidate, id) => {
+    addToIndex(indexes.filename, candidate.filename, id);
+    addToIndex(indexes.stem, candidate.stem, id);
+    addToIndex(indexes.size, candidate.size, id);
+    addToIndex(indexes.title, candidate.title, id);
+    addToIndex(indexes.titleArtist, candidate.title + '::' + candidate.artist, id);
+    addToIndex(indexes.titleAlbum, candidate.title + '::' + candidate.album, id);
+    if (candidate.filename !== '') candidateFilenameCounts.set(candidate.filename, (candidateFilenameCounts.get(candidate.filename) || 0) + 1);
   });
 
-  allPairs.sort((a, b) => b.score - a.score
-    || canonicalPath(a.missing.filePath).localeCompare(canonicalPath(b.missing.filePath))
-    || canonicalPath(a.candidate.filePath).localeCompare(canonicalPath(b.candidate.filePath)));
+  const missingDescribed = missingFiles.map(describeFile);
+  const missingFilenameCounts = new Map();
+  missingDescribed.forEach((missing) => {
+    if (missing.filename !== '') missingFilenameCounts.set(missing.filename, (missingFilenameCounts.get(missing.filename) || 0) + 1);
+  });
+
+  // Per missing record: plausible candidates (score >= 45) kept in a lazy heap rather than a full sort.
+  const heaps = missingDescribed.map((missing) => {
+    const shortlist = new Set();
+    if (missing.filePath) {
+    addIndexedValues(shortlist, indexes.filename, missing.filename);
+    addIndexedValues(shortlist, indexes.stem, missing.stem);
+    addIndexedValues(shortlist, indexes.size, missing.size);
+    addIndexedValues(shortlist, indexes.title, missing.title);
+    addIndexedValues(shortlist, indexes.titleArtist, missing.title + '::' + missing.artist);
+    addIndexedValues(shortlist, indexes.titleAlbum, missing.title + '::' + missing.album);
+    }
+    const expected = expectedMovePaths(missing.file, options);
+    const scores = [];
+    const ids = [];
+    shortlist.forEach((id) => {
+      const { score } = scoreDescribed(missing, described[id], expected, null);
+      if (score >= 45) { scores.push(score); ids.push(id); }
+    });
+    return createCandidateHeap(scores, ids, described);
+  });
+
+  // Snapshot ranking facts before the assignment pass consumes the heaps.
+  const topCandidateDemand = new Map();
+  const ranking = heaps.map((heap) => {
+    if (!heap.size) return { count: 0, best: null, bestId: -1, second: null };
+    const info = { count: heap.size, best: heap.topScore(), bestId: heap.topId(), second: heap.secondScore() };
+    topCandidateDemand.set(info.bestId, (topCandidateDemand.get(info.bestId) || 0) + 1);
+    return info;
+  });
+
+  // Greedy global assignment: repeatedly take the best remaining (score, missing path, candidate path) pair.
+  const outer = [];
+  const outerBefore = (a, b) => {
+    const sa = heaps[a].topScore();
+    const sb = heaps[b].topScore();
+    if (sa !== sb) return sa > sb;
+    if (missingDescribed[a].canonical !== missingDescribed[b].canonical) {
+      const order = pathCollator.compare(missingDescribed[a].canonical, missingDescribed[b].canonical);
+      if (order !== 0) return order < 0;
+    }
+    const ca = described[heaps[a].topId()].canonical;
+    const cb = described[heaps[b].topId()].canonical;
+    if (ca !== cb) {
+      const order = pathCollator.compare(ca, cb);
+      if (order !== 0) return order < 0;
+    }
+    return a < b;
+  };
+  const outerSiftDown = (start) => {
+    let i = start;
+    for (;;) {
+      const left = 2 * i + 1;
+      const right = left + 1;
+      let best = i;
+      if (left < outer.length && outerBefore(outer[left], outer[best])) best = left;
+      if (right < outer.length && outerBefore(outer[right], outer[best])) best = right;
+      if (best === i) return;
+      const tmp = outer[i]; outer[i] = outer[best]; outer[best] = tmp;
+      i = best;
+    }
+  };
+  heaps.forEach((heap, index) => { if (heap.size) outer.push(index); });
+  for (let i = (outer.length >> 1) - 1; i >= 0; i--) outerSiftDown(i);
+
   const assignedMissing = new Map();
   const assignedCandidates = new Set();
-  allPairs.forEach((entry) => {
-    if (entry.score < 60 || assignedMissing.has(entry.missing) || assignedCandidates.has(entry.candidate)) return;
-    assignedMissing.set(entry.missing, entry);
-    assignedCandidates.add(entry.candidate);
-  });
+  while (outer.length) {
+    const index = outer[0];
+    const heap = heaps[index];
+    const score = heap.topScore();
+    if (score < 60) break;
+    const id = heap.topId();
+    if (!assignedCandidates.has(id)) {
+      assignedMissing.set(index, { id, score });
+      assignedCandidates.add(id);
+      outer[0] = outer[outer.length - 1];
+      outer.pop();
+    } else {
+      heap.pop();
+      if (!heap.size) { outer[0] = outer[outer.length - 1]; outer.pop(); }
+    }
+    outerSiftDown(0);
+  }
 
-  const topCandidateDemand = new Map();
-  rankings.forEach((ranked) => {
-    if (!ranked[0]) return;
-    topCandidateDemand.set(ranked[0].candidate, (topCandidateDemand.get(ranked[0].candidate) || 0) + 1);
-  });
-
-  return missingFiles.map((missing) => {
-    const ranked = rankings.get(missing) || [];
-    const assigned = assignedMissing.get(missing) || null;
+  return missingFiles.map((missing, index) => {
+    const info = ranking[index];
+    const assigned = assignedMissing.get(index) || null;
     if (!assigned) {
       return {
         oldPath: missing.filePath,
@@ -240,38 +365,38 @@ function buildRelinkProposals(missingFiles, candidates, options = {}) {
         candidate: null,
         confidence: 'low',
         reasons: [],
-        ambiguous: ranked.length > 0,
-        ambiguityReasons: ranked.length ? ['No unique one-to-one candidate remains'] : ['No plausible candidate found'],
+        ambiguous: info.count > 0,
+        ambiguityReasons: info.count ? ['No unique one-to-one candidate remains'] : ['No plausible candidate found'],
         autoSelected: false,
-        score: ranked[0] ? ranked[0].score : 0,
-        secondBestScore: ranked[1] ? ranked[1].score : null,
+        score: info.best === null ? 0 : info.best,
+        secondBestScore: info.second,
       };
     }
 
     const ambiguityReasons = [];
-    const best = ranked[0];
-    const second = ranked[1];
-    const filename = normalizedFilename(missing);
-    if (second && best.score - second.score <= 20) ambiguityReasons.push('Best and second-best candidates are too close');
-    if ((candidateFilenameCounts.get(filename) || []).length > 1) ambiguityReasons.push('Duplicate filename exists in the search folder');
-    if ((missingFilenameCounts.get(filename) || []).length > 1) ambiguityReasons.push('Multiple missing entries share this filename');
-    if (best && best.candidate !== assigned.candidate) ambiguityReasons.push('The strongest candidate was assigned to another missing entry');
-    if ((topCandidateDemand.get(assigned.candidate) || 0) > 1) ambiguityReasons.push('Candidate is contested by multiple missing entries');
+    const filename = missingDescribed[index].filename;
+    if (info.second !== null && info.best - info.second <= 20) ambiguityReasons.push('Best and second-best candidates are too close');
+    if ((candidateFilenameCounts.get(filename) || 0) > 1) ambiguityReasons.push('Duplicate filename exists in the search folder');
+    if ((missingFilenameCounts.get(filename) || 0) > 1) ambiguityReasons.push('Multiple missing entries share this filename');
+    if (info.bestId !== assigned.id) ambiguityReasons.push('The strongest candidate was assigned to another missing entry');
+    if ((topCandidateDemand.get(assigned.id) || 0) > 1) ambiguityReasons.push('Candidate is contested by multiple missing entries');
     const confidence = confidenceForScore(assigned.score);
     const ambiguous = ambiguityReasons.length > 0;
+    const reasons = [];
+    scoreDescribed(missingDescribed[index], described[assigned.id], expectedMovePaths(missing, options), reasons);
     return {
       oldPath: missing.filePath,
       title: missing.title || '',
       artist: missing.artist || '',
       album: missing.album || '',
-      candidate: assigned.candidate,
+      candidate: candidates[assigned.id],
       confidence,
-      reasons: assigned.reasons,
+      reasons,
       ambiguous,
       ambiguityReasons,
       autoSelected: confidence === 'high' && !ambiguous,
       score: assigned.score,
-      secondBestScore: second ? second.score : null,
+      secondBestScore: info.second,
     };
   });
 }

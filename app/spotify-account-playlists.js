@@ -4,20 +4,29 @@ const zlib = require('zlib');
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 16 * 1024 * 1024;
+const MAX_TOTAL_EXPANDED_BYTES = 48 * 1024 * 1024;
 const MAX_RECORDS = 250000;
-function crc32(buffer) {
-  let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc ^= byte;
-    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
   }
+  return table;
+})();
+
+function tableCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buffer.length; i++) crc = CRC_TABLE[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-function spotifyRows(text) {
+const crc32 = typeof zlib.crc32 === 'function' ? (buffer) => zlib.crc32(buffer) >>> 0 : tableCrc32;
+
+function spotifyRows(text, rows = []) {
   const value = JSON.parse(text.replace(/^\uFEFF/, ''));
   if (!value || !Array.isArray(value.playlists)) throw new Error('This is not a Spotify playlist export.');
-  const rows = [];
   for (const playlist of value.playlists) {
     if (!playlist || typeof playlist.name !== 'string' || !Array.isArray(playlist.items)) throw new Error('Spotify playlist data is incomplete.');
     for (const item of playlist.items) {
@@ -30,12 +39,13 @@ function spotifyRows(text) {
   return rows;
 }
 
-function zipEntries(buffer) {
+function zipEntries(buffer, onText) {
   const end = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
   if (end < 0 || end + 22 > buffer.length) throw new Error('ZIP directory is incomplete.');
   const count = buffer.readUInt16LE(end + 10);
   let offset = buffer.readUInt32LE(end + 16);
   const entries = [];
+  let declaredTotal = 0;
   for (let i = 0; i < count; i++) {
     if (offset + 46 > buffer.length || buffer.readUInt32LE(offset) !== 0x02014b50) throw new Error('ZIP entry is incomplete.');
     const method = buffer.readUInt16LE(offset + 10);
@@ -54,14 +64,28 @@ function zipEntries(buffer) {
     if (localOffset + 30 > buffer.length || buffer.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('ZIP local entry is incomplete.');
     const start = localOffset + 30 + buffer.readUInt16LE(localOffset + 26) + buffer.readUInt16LE(localOffset + 28);
     if (start + compressed > buffer.length) throw new Error('ZIP data is incomplete.');
-    const data = buffer.subarray(start, start + compressed);
-    const decoded = method === 8 ? zlib.inflateRawSync(data, { maxOutputLength: MAX_ENTRY_BYTES }) : data;
-    if (decoded.length !== size) throw new Error('ZIP entry size does not match.');
-    if (crc32(decoded) !== expectedCrc) throw new Error('ZIP entry is corrupted.');
-    entries.push(decoded.toString('utf8'));
+    declaredTotal += size;
+    if (declaredTotal > MAX_TOTAL_EXPANDED_BYTES) throw new Error('Spotify ZIP expands beyond the size limit.');
+    entries.push({ method, start, compressed, size, expectedCrc });
   }
   if (!entries.length) throw new Error('No Spotify Playlist JSON files were found in the ZIP.');
-  return entries;
+  let actualTotal = 0;
+  for (const entry of entries) {
+    const data = buffer.subarray(entry.start, entry.start + entry.compressed);
+    let decoded = data;
+    if (entry.method === 8) {
+      try { decoded = zlib.inflateRawSync(data, { maxOutputLength: Math.min(MAX_ENTRY_BYTES, entry.size + 1) }); }
+      catch (error) {
+        if (error && error.code === 'ERR_BUFFER_TOO_LARGE') throw new Error('ZIP entry size does not match.');
+        throw error;
+      }
+    }
+    if (decoded.length !== entry.size) throw new Error('ZIP entry size does not match.');
+    actualTotal += decoded.length;
+    if (actualTotal > MAX_TOTAL_EXPANDED_BYTES) throw new Error('Spotify ZIP expands beyond the size limit.');
+    if (crc32(decoded) !== entry.expectedCrc) throw new Error('ZIP entry is corrupted.');
+    onText(decoded.toString('utf8'));
+  }
 }
 
 async function parseSpotifyAccountFile(filePath) {
@@ -69,10 +93,11 @@ async function parseSpotifyAccountFile(filePath) {
   if (!stat.isFile() || stat.size > MAX_ARCHIVE_BYTES) throw new Error('Spotify export exceeds the 64 MB limit.');
   const buffer = await fs.promises.readFile(filePath);
   const extension = path.extname(filePath).toLowerCase();
-  const texts = extension === '.zip' ? zipEntries(buffer) : [buffer.toString('utf8')];
-  const records = texts.flatMap(spotifyRows);
+  const records = [];
+  if (extension === '.zip') zipEntries(buffer, (text) => spotifyRows(text, records));
+  else spotifyRows(buffer.toString('utf8'), records);
   if (records.length > MAX_RECORDS) throw new Error('Spotify export has too many tracks.');
   return { ok: true, sourcePath: filePath, format: 'spotify-account', name: 'Spotify Playlists', records, summary: { entries: records.length, statuses: { 'spotify-account': records.length } } };
 }
 
-module.exports = { parseSpotifyAccountFile, crc32 };
+module.exports = { parseSpotifyAccountFile, crc32, tableCrc32 };
