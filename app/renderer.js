@@ -1406,12 +1406,26 @@ function indexedMatchResult(map, key, predicate) {
   if (predicate) candidates = candidates.filter(predicate);
   return { match: candidates.length === 1 ? candidates[0] : null, ambiguous: candidates.length > 1 };
 }
-function fuzzyMatchResult(predicate) {
-  var match = null;
+// Same semantics as fuzzyMatch(a, b) but both operands are already normalize()d.
+function fuzzyNormMatch(na, nb) { return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na)); }
+// Revision-cached pool of pre-normalized fields (library order) for fuzzy passes.
+function getFuzzyPool(libIndex) {
+  if (libIndex.fuzzyPool) return libIndex.fuzzyPool;
+  var pool = [];
   for (var i = 0; i < state.musicFiles.length; i++) {
-    if (!predicate(state.musicFiles[i])) continue;
+    var f = state.musicFiles[i];
+    if (!f) continue;
+    pool.push({ file: f, title: normalize(f.title), artist: normalize(f.artist), album: normalize(f.album), stem: normalize(f.filename ? f.filename.replace(/\.[^.]+$/, '') : '') });
+  }
+  libIndex.fuzzyPool = pool;
+  return pool;
+}
+function fuzzyPoolResult(pool, predicate) {
+  var match = null;
+  for (var i = 0; i < pool.length; i++) {
+    if (!predicate(pool[i])) continue;
     if (match) return { match: null, ambiguous: true };
-    match = state.musicFiles[i];
+    match = pool[i].file;
   }
   return { match: match, ambiguous: false };
 }
@@ -1459,7 +1473,8 @@ function findMatchingFileUncached(songName, artistName, albumName, filePath) {
   
   // First pass: try to match all three (Song + Artist + Album)
   if (albumName) {
-    var albumFuzzyResult = fuzzyMatchResult(function (f) { return fuzzyMatch(f.title, songName) && (!artistName || fuzzyMatch(f.artist, artistName)) && fuzzyMatch(f.album, albumName); });
+    var fuzzyPool = getFuzzyPool(libIndex);
+    var albumFuzzyResult = fuzzyPoolResult(fuzzyPool, function (f) { return fuzzyNormMatch(f.title, normTitle) && (!artistName || fuzzyNormMatch(f.artist, normArtist)) && fuzzyNormMatch(f.album, normAlbum); });
     if (albumFuzzyResult.match) return albumFuzzyResult.match;
     if (albumFuzzyResult.ambiguous) return null;
   }
@@ -1475,12 +1490,12 @@ function findMatchingFileUncached(songName, artistName, albumName, filePath) {
     if (exactFilenameResult.match) return exactFilenameResult.match;
     if (exactFilenameResult.ambiguous) return null;
   }
-  var trackFuzzyResult = fuzzyMatchResult(function (f) { return fuzzyMatch(f.title, songName) && (!artistName || fuzzyMatch(f.artist, artistName)); });
+  var trackPool = getFuzzyPool(libIndex);
+  var trackFuzzyResult = fuzzyPoolResult(trackPool, function (f) { return fuzzyNormMatch(f.title, normTitle) && (!artistName || fuzzyNormMatch(f.artist, normArtist)); });
   if (trackFuzzyResult.match) return trackFuzzyResult.match;
   if (trackFuzzyResult.ambiguous) return null;
-  var filenameFuzzyResult = fuzzyMatchResult(function (f) {
-    var fn = f.filename ? f.filename.replace(/\.[^.]+$/, '') : '';
-    return fuzzyMatch(fn, songName) && (!artistName || fuzzyMatch(f.artist, artistName)) && (!albumName || fuzzyMatch(f.album, albumName));
+  var filenameFuzzyResult = fuzzyPoolResult(trackPool, function (f) {
+    return fuzzyNormMatch(f.stem, normTitle) && (!artistName || fuzzyNormMatch(f.artist, normArtist)) && (!albumName || fuzzyNormMatch(f.album, normAlbum));
   });
   if (filenameFuzzyResult.match) return filenameFuzzyResult.match;
   return null;

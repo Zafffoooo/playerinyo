@@ -43,7 +43,7 @@ function renderDownloadQueue() {
     dockButton.setAttribute('aria-label', 'Open downloads, ' + dockButton.title);
   }
   if (dockBar) {
-    dockBar.style.width = currentItem && Number.isFinite(currentItem.downloadPercent) ? Math.max(0, Math.min(100, currentItem.downloadPercent)) + '%' : '0%';
+    updateDownloadDockBar();
   }
   if (!dockJob && dockCount) { dockCount.textContent = ''; $('btn-download-queue').title = 'Downloads'; $('btn-download-queue').setAttribute('aria-label', 'Open downloads'); }
   if (summary) {
@@ -92,18 +92,15 @@ function renderDownloadQueue() {
     var items = document.createElement('div');
     items.className = 'download-job-items';
     items.hidden = collapsed;
-    (job.items || []).forEach(function (item, itemIndex) {
+    (collapsed ? [] : (job.items || [])).forEach(function (item, itemIndex) {
       var row = document.createElement('div');
       row.className = 'download-job-item ' + (item.status || 'queued');
       var icon = item.status === 'done' ? 'ph-check-circle' : (item.status === 'failed' ? 'ph-warning-circle' : (item.status === 'downloading' ? 'ph-download-simple' : (item.status === 'searching' ? 'ph-magnifying-glass' : 'ph-clock')));
-      var progressText = item.status === 'downloading' && typeof item.downloadPercent === 'number' ? ' • ' + Math.round(item.downloadPercent) + '%' : '';
-      var outputInfo = item.status === 'done' && item.container
-        ? ' • ' + esc(String(item.container).toUpperCase()) + (item.codec ? ' / ' + esc(String(item.codec)) : '')
-        : '';
       var itemActions = '';
       if (item.status === 'done' && item.filePath) itemActions = '<button type="button" class="download-job-file-btn go-file">Go to file</button>';
       else if (item.status === 'failed' && item.row) itemActions = '<span class="download-job-item-actions"><button type="button" class="download-job-file-btn review-candidate">Review</button><button type="button" class="download-job-file-btn retry-item">Retry</button></span>';
-      row.innerHTML = '<i class="ph ' + icon + '"></i><span><strong>' + esc(item.title || 'Unknown Track') + '</strong><small>' + esc(item.artist || '') + progressText + outputInfo + (item.error ? ' • ' + esc(item.error) : '') + '</small></span>' + itemActions;
+      row.innerHTML = '<i class="ph ' + icon + '"></i><span><strong>' + esc(item.title || 'Unknown Track') + '</strong><small>' + getDownloadQueueItemDetailHtml(item) + '</small></span>' + itemActions;
+      downloadQueueItemDetailNodes.set(item, row.querySelector('small'));
       var fileBtn = row.querySelector('.go-file');
       if (fileBtn) fileBtn.addEventListener('click', function (e) { e.stopPropagation(); showFileLocation(item.filePath); });
       var reviewBtn = row.querySelector('.review-candidate');
@@ -781,7 +778,7 @@ async function searchImportCandidateRows(rows, label) {
       completed++;
       item.row.__candidateQueued = false;
       setPlaylistImportProgress(true, 'Searching', completed, total);
-      renderPlaylistImportReview();
+      schedulePlaylistImportReview();
     }
   }
   try {
@@ -806,6 +803,7 @@ async function searchAllImportCandidates() {
   await searchImportCandidateRows(getMissingImportRows(false), 'all missing tracks');
 }
 function renderPlaylistImportReview() {
+  if (playlistImportReviewFrame) { cancelAnimationFrame(playlistImportReviewFrame); playlistImportReviewFrame = null; }
   var list = $('playlist-import-list');
   if (!list || !pendingPlaylistImport) return;
   var rows = getPlaylistImportRows();
@@ -814,7 +812,7 @@ function renderPlaylistImportReview() {
   var unusableCount = 0;
   var localCandidateCount = 0;
   var reviewCount = 0;
-  list.innerHTML = '';
+  var nodes = [];
   rows.forEach(function (item, flatIndex) {
     var row = item.row;
     var title = getImportTrackTitle(row);
@@ -829,12 +827,14 @@ function renderPlaylistImportReview() {
     var checkable = localCandidate || downloadable;
     if (isMissing) missingCount++;
     if (localCandidate) localCandidateCount++;
-    var div = document.createElement('div');
-    div.className = 'playlist-import-row' + (matched ? ' matched' : '') + (localCandidate ? ' local-reference' : '') + (row.__downloadStatus === 'downloading' ? ' downloading' : '') + (row.__downloadStatus === 'failed' ? ' failed' : '');
-    div.dataset.flatIndex = String(flatIndex);
     var checked = localCandidate ? row.__addLocalSelected === true : (downloadable && row.__downloadSelected !== false);
     var busy = !!pendingPlaylistImport.finishing || playlistImportSearching || !!row.__candidateLoading;
     if (downloadable && row.__downloadCandidates && row.__downloadCandidates.length && !row.__downloadCandidate) reviewCount++;
+    var signature = getPlaylistImportRowSignature(row, flatIndex, matched, localCandidate, downloadable, checked, busy);
+    var reused = getReusablePlaylistImportRow(row, signature);
+    if (reused) { nodes.push(reused); return; }
+    var div = createPlaylistImportRowNode(row, signature, flatIndex, matched, localCandidate);
+    nodes.push(div);
     var sourceStatus = row.SourceStatus || '';
     var status = 'Missing';
     if (matched) status = 'In library';
@@ -925,8 +925,8 @@ function renderPlaylistImportReview() {
       sourcePath.textContent = row.SourceLocation;
       div.appendChild(sourcePath);
     }
-    list.appendChild(div);
   });
+  reconcileChildren(list, nodes);
   var diff = pendingPlaylistImport.diff;
   $('playlist-import-subtitle').textContent = (diff ? diff.added + ' new · ' + diff.existing + ' existing · ' + diff.removed + ' removed from source; removed tracks stay in your playlist. ' : '') + 'Read ' + rows.length + ' · Matched local ' + matchedCount + ' · Missing ' + Math.max(0, missingCount - unusableCount) + ' · Unusable ' + unusableCount + '.' + (localCandidateCount ? ' ' + localCandidateCount + ' local file(s) available.' : '') + (reviewCount ? ' ' + reviewCount + ' need review.' : '');
   var hasDownloads = rows.some(function (item) { return isPlaylistImportDownloadEligible(item.row); });
