@@ -499,6 +499,10 @@ async function mergeBackfilledMetadata(result) {
     if (!patch || !patch.filePath) return;
     var current = index.byPath.get(patch.filePath) || index.byStrippedPath.get(stripFileUrl(patch.filePath));
     if (!current) return;
+    if (typeof patch.metadataBackfillSig === 'string' && current.metadataBackfillSig !== patch.metadataBackfillSig) {
+      current.metadataBackfillSig = patch.metadataBackfillSig;
+      changed = true;
+    }
     BACKFILL_METADATA_FIELDS.forEach(function (field) {
       var isMissing = field === 'duration' ? !(Number(current.duration) > 0) : (current[field] === null || current[field] === undefined);
       if (isMissing && Object.prototype.hasOwnProperty.call(patch, field) && !Object.is(current[field], patch[field])) {
@@ -521,6 +525,9 @@ function getPendingMetadataBackfillFiles(files) {
   var mainFields = BACKFILL_METADATA_FIELDS.filter(function (field) { return field !== 'addedAtMs' && field !== 'duration'; });
   return (Array.isArray(files) ? files : []).filter(function (file) {
     if (!file || !file.filePath) return false;
+    // Stamp format "1:<fileSize>:<modifiedAtMs>" is defined in metadata-backfill.js (renderer cannot require it).
+    if (file.metadataBackfillSig === '1:' + String(file.fileSize) + ':' + String(file.modifiedAtMs)) return false;
+    // A stale or missing stamp only warrants a re-parse while something is still missing.
     return !(Number(file.duration) > 0) || mainFields.some(function (field) { return file[field] === null || file[field] === undefined; });
   });
 }
