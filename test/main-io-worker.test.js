@@ -151,7 +151,7 @@ test('backup snapshot reads and source writes share one lock; unrelated writes s
   const backupSourceLock = createDataFileLock();
   const writes = [];
   const context = vm.createContext({ fileWriteQueues: new Map(), backupSourceLock, backupSourceFiles: new Set(['/library.json']),
-    writeTextFileAtomic: async (...args) => writes.push(args) });
+    dataTransactionGeneration: 0, writeTextFileAtomic: async (...args) => writes.push(args) });
   vm.runInContext(source.slice(start, end), context);
   let release;
   const held = backupSourceLock.run(() => new Promise((resolve) => { release = resolve; }));
@@ -164,6 +164,28 @@ test('backup snapshot reads and source writes share one lock; unrelated writes s
   await held;
   await save;
   assert.deepEqual(writes, [['/cache.json', 'cache'], ['/library.json', 'new data']]);
+});
+
+test('source writes queued before a committed transaction are dropped as stale', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../app/main.js'), 'utf8');
+  const start = source.indexOf('function queueTextFileWrite(');
+  const end = source.indexOf('function queueJsonWrite(', start);
+  const backupSourceLock = createDataFileLock();
+  const writes = [];
+  const context = vm.createContext({ fileWriteQueues: new Map(), backupSourceLock, backupSourceFiles: new Set(['/settings.json']),
+    dataTransactionGeneration: 0, writeTextFileAtomic: async (...args) => writes.push(args) });
+  vm.runInContext(source.slice(start, end), context);
+  let release;
+  // Simulates replaceJsonFilesTransaction: holds the lock, then bumps the generation on commit.
+  const transaction = backupSourceLock.run(() => new Promise((resolve) => { release = resolve; }).then(() => { context.dataTransactionGeneration++; }));
+  const stale = context.queueTextFileWrite('/settings.json', 'pre-restore settings');
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await transaction;
+  await stale;
+  assert.deepEqual(writes, []);
+  await context.queueTextFileWrite('/settings.json', 'post-restore settings');
+  assert.deepEqual(writes, [['/settings.json', 'post-restore settings']]);
 });
 
 test('data file lock serializes tasks FIFO and releases after failures', async () => {
