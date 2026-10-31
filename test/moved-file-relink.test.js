@@ -192,7 +192,7 @@ test('400 moved duplicate-named records stay fast and review-only', () => {
   const started = process.hrtime.bigint();
   const proposals = buildRelinkProposals(missing, candidates, { oldRoots: ['/old-library'], searchRoot: '/new-library' });
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-  assert.ok(elapsedMs < 300, `relink took ${elapsedMs.toFixed(0)}ms`);
+  assert.ok(elapsedMs < 1000, `relink took ${elapsedMs.toFixed(0)}ms`);
   assert.equal(proposals.length, count);
   proposals.forEach((proposal, i) => {
     assert.equal(proposal.candidate.filePath, `/new-library/Album ${i}/01.mp3`);

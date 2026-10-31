@@ -86,8 +86,8 @@ test('table CRC32 matches the bitwise reference', () => {
 });
 
 test('ZIP rejects cumulative expanded bytes above the budget before inflating', async () => {
-  const payload = Buffer.alloc(10 * 1024 * 1024, 0x20);
-  const entries = Array.from({ length: 6 }, (_, i) => ({ name: `Playlist${i + 1}.json`, payload }));
+  const payload = Buffer.alloc(15 * 1024 * 1024, 0x20);
+  const entries = Array.from({ length: 11 }, (_, i) => ({ name: `Playlist${i + 1}.json`, payload }));
   await withZip(entries, (file) => assert.rejects(parseSpotifyAccountFile(file), /expands beyond the size limit/));
 });
 

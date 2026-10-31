@@ -4,7 +4,7 @@ const zlib = require('zlib');
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 16 * 1024 * 1024;
-const MAX_TOTAL_EXPANDED_BYTES = 48 * 1024 * 1024;
+const MAX_TOTAL_EXPANDED_BYTES = 160 * 1024 * 1024;
 const MAX_RECORDS = 250000;
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
