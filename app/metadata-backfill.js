@@ -1,12 +1,11 @@
 'use strict';
 
 function createMetadataBackfillStamp(file) {
-  return { v: 1, sig: `${file.fileSize}:${file.modifiedAtMs}` };
+  return `1:${file.fileSize}:${file.modifiedAtMs}`;
 }
 
 function hasCurrentMetadataBackfill(file) {
-  const stamp = file && file.metadataBackfill;
-  return !!stamp && stamp.v === 1 && stamp.sig === createMetadataBackfillStamp(file).sig;
+  return !!file && file.metadataBackfillSig === createMetadataBackfillStamp(file);
 }
 
 module.exports = { createMetadataBackfillStamp, hasCurrentMetadataBackfill };

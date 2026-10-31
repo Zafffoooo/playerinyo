@@ -4,6 +4,7 @@ const { parentPort } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
 const { isPlainObject } = require('./main-data-sanitizers');
+const { writeTextFileAtomic, MAX_METADATA_EDIT_BYTES } = require('./main-file-helpers');
 const { MAX_BACKUP_BYTES, validateBackupData, summarizeBackupData } = require('./backup-validation');
 
 let builtBackup = null;
@@ -47,14 +48,7 @@ async function buildBackup({ paths, settings, fallbackLikedSongs, kind, appName 
 
 async function writeBackup({ filePath }) {
   if (!builtBackup) throw new Error('No validated backup is ready to write');
-  const tmpPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  try {
-    await fs.promises.writeFile(tmpPath, builtBackup.text, { encoding: 'utf8', mode: 0o600 });
-    await fs.promises.rename(tmpPath, filePath);
-  } catch (error) {
-    await fs.promises.unlink(tmpPath).catch(() => { /* The failed atomic-write temp file may not exist. */ });
-    throw error;
-  }
+  await writeTextFileAtomic(filePath, builtBackup.text);
   try {
     const writtenPayload = await readJsonFileStrict(filePath, null);
     validateBackupData(writtenPayload);
@@ -78,7 +72,7 @@ async function updateMp3({ filePath, tags }) {
   // write. Keep both that read and the full-buffer rewrite off the main thread.
   const NodeID3 = require('node-id3');
   const stat = await fs.promises.stat(filePath);
-  if (!stat.isFile() || stat.size > 512 * 1024 * 1024) throw new Error('MP3 file exceeds the 512 MB metadata editing limit');
+  if (!stat.isFile() || stat.size > MAX_METADATA_EDIT_BYTES) throw new Error('MP3 file exceeds the 512 MB metadata editing limit');
   if (tags.image && tags.image.imageBuffer) tags.image.imageBuffer = Buffer.from(tags.image.imageBuffer);
   const result = NodeID3.update(tags, filePath);
   if (result !== true) throw (result instanceof Error ? result : new Error('MP3 metadata writer returned an invalid result'));

@@ -8,7 +8,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
 const NodeID3 = require('node-id3');
-const { createMainWorkerClient, runMainWorkerTask } = require('../app/main-worker-client');
+const { createDataFileLock } = require('../app/data-file-lock');
+const { createMainWorkerClient, createSharedWorkerClient, runMainWorkerTask } = require('../app/main-worker-client');
 const { sanitizeSettingsForBackup, validateBackupData } = require('../app/backup-validation');
 const { createBackupRetentionCache } = require('../app/backup-retention-cache');
 const { createLocalBackupFilename, isAutomaticBackupFilename, isSafetyBackupFilename } = require('../app/backup-helpers');
@@ -27,7 +28,7 @@ test('worker builds, atomically writes, and rereads identical pretty JSON backup
   const root = await fixture(t);
   const args = backupArgs(root);
   args.settings = sanitizeSettingsForBackup({ volume: 0.5, lastfmSessionKey: 'private', ytdlCookiesFile: '/private/cookies.txt' });
-  const library = [{ filePath: '/music/test.mp3', filename: 'test.mp3', title: 'Title', artist: 'Artist', album: 'Album', metadataBackfill: { v: 1, sig: '100:123' } }];
+  const library = [{ filePath: '/music/test.mp3', filename: 'test.mp3', title: 'Title', artist: 'Artist', album: 'Album', metadataBackfillSig: '1:100:123' }];
   await fs.promises.writeFile(args.paths.library, JSON.stringify(library));
   const worker = createMainWorkerClient();
   t.after(() => worker.close());
@@ -127,8 +128,8 @@ test('backup retention validates unchanged files once and rechecks changed conte
   const context = vm.createContext({ fs, path, BACKUPS_DIR: root, createBackupRetentionCache, isAutomaticBackupFilename, isSafetyBackupFilename, setImmediate, console,
     createMainWorkerClient: () => {
       const worker = createMainWorkerClient();
-      return { request: (...args) => { inspections++; return worker.request(...args); }, close: () => worker.close() };
-    } });
+      return { ...worker, request: (...args) => { inspections++; return worker.request(...args); } };
+    }, createSharedWorkerClient });
   vm.runInContext(source.slice(start, end), context);
   const name = createLocalBackupFilename('automatic', Date.now());
   const filePath = path.join(root, name);
@@ -143,21 +144,96 @@ test('backup retention validates unchanged files once and rechecks changed conte
   assert.equal(inspections, 2);
 });
 
-test('backup snapshot reads hold new app-data saves without losing writes', async () => {
+test('backup snapshot reads and source writes share one lock; unrelated writes stay independent', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../app/main.js'), 'utf8');
   const start = source.indexOf('function queueTextFileWrite(');
   const end = source.indexOf('function queueJsonWrite(', start);
-  let release;
+  const backupSourceLock = createDataFileLock();
   const writes = [];
-  const context = vm.createContext({ fileWriteQueues: new Map(), backupSnapshotReadPromise: new Promise((resolve) => { release = resolve; }),
+  const context = vm.createContext({ fileWriteQueues: new Map(), backupSourceLock, backupSourceFiles: new Set(['/library.json']),
     writeTextFileAtomic: async (...args) => writes.push(args) });
   vm.runInContext(source.slice(start, end), context);
+  let release;
+  const held = backupSourceLock.run(() => new Promise((resolve) => { release = resolve; }));
   const save = context.queueTextFileWrite('/library.json', 'new data');
+  const other = context.queueTextFileWrite('/cache.json', 'cache');
+  await other;
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(writes.length, 0);
+  assert.deepEqual(writes, [['/cache.json', 'cache']]);
   release();
+  await held;
   await save;
-  assert.deepEqual(writes, [['/library.json', 'new data']]);
+  assert.deepEqual(writes, [['/cache.json', 'cache'], ['/library.json', 'new data']]);
+});
+
+test('data file lock serializes tasks FIFO and releases after failures', async () => {
+  const lock = createDataFileLock();
+  const order = [];
+  let release;
+  const first = lock.run(async () => { order.push('a-start'); await new Promise((resolve) => { release = resolve; }); order.push('a-end'); });
+  const second = lock.run(async () => { order.push('b'); throw new Error('boom'); });
+  const third = lock.run(async () => { order.push('c'); });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ['a-start']);
+  release();
+  await first;
+  await assert.rejects(second, /boom/);
+  await third;
+  assert.deepEqual(order, ['a-start', 'a-end', 'b', 'c']);
+});
+
+test('shared worker client recreates a dead worker and idle-closes', async () => {
+  const created = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  function fakeWorker(dieOn) {
+    let closed = false;
+    const worker = { closes: 0, isClosed: () => closed,
+      async request(op, args) {
+        if (closed) throw new Error('closed');
+        if (args && args.crash === dieOn) { closed = true; throw new Error('worker died'); }
+        return `${created.indexOf(worker)}:${op}`;
+      },
+      async close() { closed = true; worker.closes++; } };
+    created.push(worker);
+    return worker;
+  }
+  const shared = createSharedWorkerClient({ create: () => fakeWorker(true),
+    setTimer: (task) => { const id = ++nextTimer; timers.set(id, task); return id; }, clearTimer: (id) => timers.delete(id) });
+  assert.equal(await shared.request('x', {}), '0:x');
+  await assert.rejects(shared.request('x', { crash: true }), /worker died/);
+  assert.equal(await shared.request('x', {}), '1:x');
+  assert.equal(created.length, 2);
+  assert.equal(timers.size, 1);
+  Array.from(timers.values())[0]();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(created[1].closes, 1);
+  assert.equal(await shared.request('x', {}), '2:x');
+  await shared.close();
+});
+
+test('backup retention keeps validating later files after the worker dies', async (t) => {
+  const root = await fixture(t);
+  const source = fs.readFileSync(path.join(__dirname, '../app/main.js'), 'utf8');
+  const start = source.indexOf('const backupRetentionCache =');
+  const end = source.indexOf('async function ensureAutomaticBackupHistoryLoaded(', start);
+  let creations = 0;
+  const context = vm.createContext({ fs, path, BACKUPS_DIR: root, createBackupRetentionCache, isAutomaticBackupFilename, isSafetyBackupFilename, setImmediate, console: { warn() {} },
+    createSharedWorkerClient, createMainWorkerClient: () => {
+      const worker = createMainWorkerClient();
+      const id = ++creations;
+      return { ...worker, request: async (op, args) => {
+        if (id === 1) { await worker.close(); throw new Error('worker crashed'); }
+        return worker.request(op, args);
+      } };
+    } });
+  vm.runInContext(source.slice(start, end), context);
+  const payload = { app: 'Playerinyo', schemaVersion: 1, kind: 'automatic', data: { library: [], playlists: [], mappings: {}, settings: {} } };
+  const names = [0, 1].map((offset) => createLocalBackupFilename('automatic', Date.now() + offset * 1000));
+  for (const name of names) await fs.promises.writeFile(path.join(root, name), JSON.stringify(payload));
+  const valid = Array.from(await context.getValidatedAutomaticBackupNames());
+  assert.equal(valid.length, 1);
+  assert.equal(creations, 2);
 });
 
 test('worker rejects oversized backup source before reading its contents', async (t) => {

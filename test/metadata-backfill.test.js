@@ -49,12 +49,13 @@ function loadMain(parseFile) {
 
 test('backfill stamps match version, size, and fractional mtime', () => {
   const file = track();
-  file.metadataBackfill = createMetadataBackfillStamp(file);
-  assert.deepEqual(file.metadataBackfill, { v: 1, sig: '1000:123.5' });
+  file.metadataBackfillSig = createMetadataBackfillStamp(file);
+  assert.equal(file.metadataBackfillSig, '1:1000:123.5');
+  assert.equal(typeof file.metadataBackfillSig, 'string');
   assert.equal(hasCurrentMetadataBackfill(file), true);
   assert.equal(hasCurrentMetadataBackfill({ ...file, fileSize: 1001 }), false);
   assert.equal(hasCurrentMetadataBackfill({ ...file, modifiedAtMs: 124 }), false);
-  assert.equal(hasCurrentMetadataBackfill({ ...file, metadataBackfill: { v: 2, sig: '1000:123.5' } }), false);
+  assert.equal(hasCurrentMetadataBackfill({ ...file, metadataBackfillSig: '2:1000:123.5', metadataBackfill: { v: 1, sig: '1000:123.5' } }), false);
 });
 
 test('main skips stamped null tags and stamps every successful parse without covers', async () => {
@@ -68,9 +69,9 @@ test('main skips stamped null tags and stamps every successful parse without cov
   const file = track();
   const result = await handler(null, [file]);
   assert.equal(result.updates.length, 1);
-  assert.equal(result.updates[0].metadataBackfill.sig, '1000:123.5');
+  assert.equal(result.updates[0].metadataBackfillSig, '1:1000:123.5');
   assert.equal(result.updates[0].year, null);
-  file.metadataBackfill = result.updates[0].metadataBackfill;
+  file.metadataBackfillSig = result.updates[0].metadataBackfillSig;
   assert.equal((await handler(null, [file])).updates.length, 0);
   assert.equal(parsed.length, 1);
 });
@@ -78,7 +79,7 @@ test('main skips stamped null tags and stamps every successful parse without cov
 test('failed parses get no stamp and changed signatures are parsed again', async () => {
   let parses = 0;
   const file = track();
-  file.metadataBackfill = createMetadataBackfillStamp(file);
+  file.metadataBackfillSig = createMetadataBackfillStamp(file);
   const handler = loadMain(async () => {
     if (++parses === 1) throw new Error('malformed file');
     return { common: {}, format: {} };
@@ -86,35 +87,47 @@ test('failed parses get no stamp and changed signatures are parsed again', async
   file.fileSize++;
   assert.equal((await handler(null, [file])).updates.length, 0);
   const result = await handler(null, [file]);
-  assert.equal(result.updates[0].metadataBackfill.sig, '1001:123.5');
+  assert.equal(result.updates[0].metadataBackfillSig, '1:1001:123.5');
 });
 
 test('renderer saves stamp-only changes without overwriting present tag fields', async () => {
-  const file = track({ year: 2000, genre: 'Existing', metadataBackfill: { v: 1, sig: 'old' } });
+  const file = track({ year: 2000, genre: 'Existing', metadataBackfillSig: '1:1:old' });
   const renderer = loadRenderer([file]);
-  const patch = { filePath: file.filePath, metadataBackfill: createMetadataBackfillStamp(file), year: 2020, genre: 'New' };
+  const patch = { filePath: file.filePath, metadataBackfillSig: createMetadataBackfillStamp(file), year: 2020, genre: 'New' };
   await renderer.context.mergeBackfilledMetadata({ ok: true, updates: [patch] });
   assert.equal(file.year, 2000);
   assert.equal(file.genre, 'Existing');
-  assert.equal(file.metadataBackfill, patch.metadataBackfill);
+  assert.equal(file.metadataBackfillSig, patch.metadataBackfillSig);
   assert.equal(renderer.persisted, 1);
   assert.equal(renderer.marked, 1);
   await renderer.context.mergeBackfilledMetadata({ ok: true, updates: [patch] });
   assert.equal(renderer.persisted, 1);
 });
 
-test('renderer skips matching stamps and retries changed files even with complete tags', () => {
-  const file = track(Object.fromEntries(fields.map((field) => [field, 1])));
-  file.metadataBackfill = createMetadataBackfillStamp(file);
-  const renderer = loadRenderer([file]);
-  assert.equal(renderer.context.getPendingMetadataBackfillFiles([file]).length, 0);
-  file.modifiedAtMs++;
-  assert.equal(renderer.context.getPendingMetadataBackfillFiles([file]).length, 1);
+test('stale stamp re-parses only while duration or a backfill field is still missing', async () => {
+  const complete = track(Object.fromEntries(fields.map((field) => [field, 1])));
+  complete.metadataBackfillSig = createMetadataBackfillStamp(complete);
+  const renderer = loadRenderer([complete]);
+  assert.equal(renderer.context.getPendingMetadataBackfillFiles([complete]).length, 0);
+  complete.modifiedAtMs++;
+  assert.equal(renderer.context.getPendingMetadataBackfillFiles([complete]).length, 0);
+  const missingField = { ...complete, year: null };
+  assert.equal(renderer.context.getPendingMetadataBackfillFiles([missingField]).length, 1);
+  const missingDuration = { ...complete, duration: 0 };
+  assert.equal(renderer.context.getPendingMetadataBackfillFiles([missingDuration]).length, 1);
+  const current = track({ metadataBackfillSig: '1:1000:123.5' });
+  assert.equal(renderer.context.getPendingMetadataBackfillFiles([current]).length, 0);
+  let parses = 0;
+  const handler = loadMain(async () => { parses++; return { common: {}, format: {} }; });
+  assert.equal((await handler(null, [complete])).updates.length, 0);
+  assert.equal(parses, 0);
+  assert.equal((await handler(null, [{ ...complete, year: null }])).updates.length, 1);
+  assert.equal(parses, 1);
 });
 
 test('library backup validation preserves the new backfill stamp', () => {
   const file = track();
-  file.metadataBackfill = createMetadataBackfillStamp(file);
+  file.metadataBackfillSig = createMetadataBackfillStamp(file);
   const result = validateBackupData({ library: [file], playlists: [], mappings: {}, settings: {} });
-  assert.deepEqual(result.library[0].metadataBackfill, file.metadataBackfill);
+  assert.equal(result.library[0].metadataBackfillSig, file.metadataBackfillSig);
 });

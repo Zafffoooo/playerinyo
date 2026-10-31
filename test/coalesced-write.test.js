@@ -33,7 +33,7 @@ test('multiple known-index persists serialize once at flush using the newest sta
     await Promise.resolve();
   }
   assert.equal(serializations, 0);
-  assert.equal(timers.timers.size, 1);
+  assert.equal(timers.timers.size, 2); // debounce + max-wait
   timers.fire();
   await drainer.drain();
   assert.equal(serializations, 1);
@@ -95,4 +95,22 @@ test('failed writes stay dirty for a later flush', async () => {
   await assert.rejects(persistence.flush(), /write failed/);
   await persistence.flush();
   assert.equal(attempts, 2);
+});
+
+test('max wait flushes even when schedule keeps resetting the debounce', async () => {
+  const timers = [];
+  const drainer = createPendingWriteDrainer();
+  let writes = 0;
+  const persistence = createCoalescedWrite({ drainer, write() { writes++; }, delayMs: 1500, maxWaitMs: 10000,
+    setTimer(task, ms) { const entry = { task, ms, live: true }; timers.push(entry); return entry; },
+    clearTimer(entry) { entry.live = false; } });
+  for (let i = 0; i < 5; i++) persistence.schedule();
+  const maxTimers = timers.filter((entry) => entry.ms === 10000 && entry.live);
+  assert.equal(maxTimers.length, 1);
+  assert.equal(timers.filter((entry) => entry.ms === 1500 && entry.live).length, 1);
+  maxTimers[0].live = false;
+  maxTimers[0].task();
+  await drainer.drain();
+  assert.equal(writes, 1);
+  assert.equal(timers.filter((entry) => entry.live).length, 0);
 });

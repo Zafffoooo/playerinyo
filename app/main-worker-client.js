@@ -40,13 +40,58 @@ function createMainWorkerClient() {
     await worker.terminate();
   }
 
+  return { request, close, isClosed: () => closedError !== null, ref: () => worker.ref(), unref: () => worker.unref() };
+}
+
+// Lazily created worker that is recreated after it dies and terminated after
+// idleMs without in-flight requests. A request that was running when the worker
+// died rejects; later requests transparently get a fresh worker.
+function createSharedWorkerClient({ idleMs = 30000, create = createMainWorkerClient, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  let client = null;
+  let inflight = 0;
+  let idleTimer = null;
+
+  function clearIdle() {
+    if (idleTimer !== null) clearTimer(idleTimer);
+    idleTimer = null;
+  }
+  function armIdle() {
+    clearIdle();
+    idleTimer = setTimer(() => {
+      idleTimer = null;
+      if (inflight === 0) close().catch(() => { /* An idle worker that fails to terminate is already unusable. */ });
+    }, idleMs);
+    if (idleTimer && typeof idleTimer.unref === 'function') idleTimer.unref();
+  }
+  async function request(operation, args) {
+    clearIdle();
+    if (!client || client.isClosed()) client = create();
+    const current = client;
+    if (typeof current.ref === 'function') current.ref();
+    inflight++;
+    try { return await current.request(operation, args); }
+    finally {
+      inflight--;
+      if (inflight === 0) {
+        // An idle worker must not keep the process alive before idle-close.
+        if (typeof current.unref === 'function') current.unref();
+        armIdle();
+      }
+    }
+  }
+  async function close() {
+    clearIdle();
+    const current = client;
+    client = null;
+    if (current) await current.close();
+  }
   return { request, close };
 }
 
+const sharedMainWorker = createSharedWorkerClient();
+
 async function runMainWorkerTask(operation, args) {
-  const worker = createMainWorkerClient();
-  try { return await worker.request(operation, args); }
-  finally { await worker.close(); }
+  return sharedMainWorker.request(operation, args);
 }
 
-module.exports = { createMainWorkerClient, runMainWorkerTask };
+module.exports = { createMainWorkerClient, createSharedWorkerClient, runMainWorkerTask };

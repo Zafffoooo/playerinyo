@@ -16,7 +16,9 @@ const { buildCandidatePools, selectDiscoveryBatch, flattenPools, getCandidateIde
 const { createKnownTrackIndex, seedFromHistory, indexTrack, hasKnownTrack, beginLastfmSync, ingestLastfmRecentPage, getLastfmRecentTracksRequest, MAX_SERIALIZED_BYTES, serializeKnownTrackIndex } = require('./known-track-index');
 const { createPendingWriteDrainer } = require('./pending-write-drainer');
 const { createCoalescedWrite } = require('./coalesced-write');
-const { createMainWorkerClient, runMainWorkerTask } = require('./main-worker-client');
+const { createMainWorkerClient, createSharedWorkerClient, runMainWorkerTask } = require('./main-worker-client');
+const { createDataFileLock } = require('./data-file-lock');
+const { writeTextFileAtomic, MAX_METADATA_EDIT_BYTES, MAX_DOWNLOADED_AUDIO_BYTES } = require('./main-file-helpers');
 const { createBackupRetentionCache } = require('./backup-retention-cache');
 const {
   MAX_BACKUP_BYTES, MAX_BACKUP_VALUES, MAX_LIBRARY_TRACKS, MAX_PLAYLIST_TRACKS, SENSITIVE_SETTING_KEYS,
@@ -323,8 +325,6 @@ const MAX_IMAGE_CACHE_ENTRIES = 12;
 const MAX_CSV_BYTES = 64 * 1024 * 1024;
 const MAX_CSV_RECORDS = 250000;
 const MAX_AUDIO_IPC_BYTES = 128 * 1024 * 1024;
-const MAX_METADATA_EDIT_BYTES = 512 * 1024 * 1024;
-const MAX_DOWNLOADED_AUDIO_BYTES = 512 * 1024 * 1024;
 const MAX_SCAN_AUDIO_FILES = 250000;
 const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm', 'www.google.com', 'musicbrainz.org']);
 const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'lastfm.freetls.fastly.net']);
@@ -481,25 +481,14 @@ function readAppDataFile(filePath, fallback, label, validate) {
 }
 
 const fileWriteQueues = new Map();
-let backupSnapshotReadPromise = null;
-
-async function writeTextFileAtomic(filePath, text) {
-  const tmpPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  try {
-    await fs.promises.writeFile(tmpPath, text, { encoding: 'utf8', mode: 0o600 });
-    await fs.promises.rename(tmpPath, filePath);
-  } catch (e) {
-    try { await fs.promises.unlink(tmpPath); } catch (_) { /* The failed atomic-write temp file may not exist. */ }
-    throw e;
-  }
-}
+const backupSourceLock = createDataFileLock();
 
 function queueTextFileWrite(filePath, text) {
   const previous = fileWriteQueues.get(filePath) || Promise.resolve();
-  // Preserve the old synchronous backup read's snapshot boundary: new saves
-  // queue normally, but cannot replace a source file while its worker reads.
-  const snapshotReady = backupSnapshotReadPromise || Promise.resolve();
-  const next = Promise.all([previous.catch(() => { }), snapshotReady]).then(() => writeTextFileAtomic(filePath, text));
+  const write = () => writeTextFileAtomic(filePath, text);
+  // Only snapshot sources share the backup/transaction lock; unrelated cache
+  // writes keep their independent per-file queues.
+  const next = previous.catch(() => { }).then(() => backupSourceFiles.has(filePath) ? backupSourceLock.run(write) : write());
   fileWriteQueues.set(filePath, next);
   const cleanup = () => { if (fileWriteQueues.get(filePath) === next) fileWriteQueues.delete(filePath); };
   next.then(cleanup, cleanup);
@@ -642,7 +631,7 @@ async function replaceJsonFilesTransactionInner(entries) {
 
 async function replaceJsonFilesTransaction(entries) {
   if (activeDataTransactionPromise) throw new Error('Another data transaction is already active');
-  const transaction = replaceJsonFilesTransactionInner(entries);
+  const transaction = backupSourceLock.run(() => replaceJsonFilesTransactionInner(entries));
   activeDataTransactionPromise = transaction;
   try { return await transaction; }
   finally { if (activeDataTransactionPromise === transaction) activeDataTransactionPromise = null; }
@@ -2078,6 +2067,7 @@ const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 configureDiscordCoverCache(path.join(app.getPath('userData'), 'discord-cover-cache.json'));
 const LISTENING_STATS_FILE = path.join(app.getPath('userData'), 'listening-stats.json');
 const LIKED_SONGS_FILE = path.join(app.getPath('userData'), 'liked-songs.json');
+const backupSourceFiles = new Set([LIBRARY_FILE, PLAYLISTS_FILE, MAPPINGS_FILE, SETTINGS_FILE, LISTENING_STATS_FILE, LIKED_SONGS_FILE]);
 const RESTORE_MANIFEST_FILE = path.join(app.getPath('userData'), '.backup-restore-transaction.json');
 const COVERS_DIR = path.join(app.getPath('userData'), 'covers');
 const BACKUPS_DIR = path.join(app.getPath('userData'), 'backups');
@@ -2170,11 +2160,15 @@ const LASTFM_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 
 let knownTrackIndex = null;
 let knownTrackIndexLoadPromise = null;
+let knownTrackIndexFlushError = null;
 const knownTrackIndexWriteDrainer = createPendingWriteDrainer();
 const knownTrackIndexPersistence = createCoalescedWrite({
   drainer: knownTrackIndexWriteDrainer,
   write: () => queueTextFileWrite(KNOWN_TRACK_INDEX_FILE, serializeKnownTrackIndex(knownTrackIndex, MAX_SERIALIZED_BYTES)),
-  onError: (error) => console.error('Failed to persist known-track index:', error),
+  onError: (error) => {
+    knownTrackIndexFlushError = error;
+    console.error('Failed to persist known-track index:', error);
+  },
 });
 let lastfmKnownSyncPromise = null;
 let lastfmKnownSyncTimer = null;
@@ -2239,9 +2233,14 @@ async function ensureKnownTrackIndex() {
   return knownTrackIndexLoadPromise;
 }
 
+// Writes are deferred, so a failure cannot be reported to the call that
+// caused it. Remember the last flush failure and reject the next call once
+// (the write stays dirty and is retried by that call's schedule).
 function persistKnownTrackIndex() {
   if (knownTrackIndex) knownTrackIndexPersistence.schedule();
-  return Promise.resolve();
+  const error = knownTrackIndexFlushError;
+  knownTrackIndexFlushError = null;
+  return error ? Promise.reject(error) : Promise.resolve();
 }
 
 async function seedKnownTrackIndexFromSettings() {
@@ -2547,7 +2546,8 @@ async function getValidatedBackupNames(kind) {
   const entries = await fs.promises.readdir(BACKUPS_DIR, { withFileTypes: true });
   const isMatchingFilename = kind === 'automatic' ? isAutomaticBackupFilename : isSafetyBackupFilename;
   const names = [];
-  let worker = null;
+  // Recreates the worker if one crashes, so one bad file cannot fail the rest.
+  const worker = createSharedWorkerClient({ create: createMainWorkerClient });
   try {
     for (const entry of entries) {
       if (!entry.isFile() || entry.isSymbolicLink() || !isMatchingFilename(entry.name)) continue;
@@ -2557,7 +2557,6 @@ async function getValidatedBackupNames(kind) {
         if (!stat.isFile() || stat.isSymbolicLink()) continue;
         let metadata = backupRetentionCache.get(filePath, stat);
         if (!metadata) {
-          if (!worker) worker = createMainWorkerClient();
           metadata = await worker.request('inspectBackup', { filePath });
           // Cache only if the same regular file survived validation unchanged.
           const after = await fs.promises.lstat(filePath);
@@ -2572,7 +2571,7 @@ async function getValidatedBackupNames(kind) {
     }
     return names;
   } finally {
-    if (worker) await worker.close();
+    await worker.close();
   }
 }
 
@@ -2601,25 +2600,20 @@ async function createValidatedBackup(kind, extras, filePath) {
   await waitForPendingDataWrites();
   const worker = createMainWorkerClient();
   try {
-    let releaseSnapshot;
-    const snapshotRead = new Promise((resolve) => { releaseSnapshot = resolve; });
-    backupSnapshotReadPromise = snapshotRead;
-    let built;
-    try {
-      built = await worker.request('buildBackup', {
-        paths: { settings: SETTINGS_FILE, listeningStats: LISTENING_STATS_FILE, library: LIBRARY_FILE, playlists: PLAYLISTS_FILE, mappings: MAPPINGS_FILE, likedSongs: LIKED_SONGS_FILE },
-        settings: sanitizeSettingsForBackup(appSettings),
-        fallbackLikedSongs: extras && Array.isArray(extras.likedSongs) ? extras.likedSongs : [],
-        kind,
-        appName: APP_NAME,
-      });
-    } finally {
-      releaseSnapshot();
-      if (backupSnapshotReadPromise === snapshotRead) backupSnapshotReadPromise = null;
-    }
+    const built = await backupSourceLock.run(() => worker.request('buildBackup', {
+      paths: { settings: SETTINGS_FILE, listeningStats: LISTENING_STATS_FILE, library: LIBRARY_FILE, playlists: PLAYLISTS_FILE, mappings: MAPPINGS_FILE, likedSongs: LIKED_SONGS_FILE },
+      settings: sanitizeSettingsForBackup(appSettings),
+      fallbackLikedSongs: extras && Array.isArray(extras.likedSongs) ? extras.likedSongs : [],
+      kind,
+      appName: APP_NAME,
+    }));
     if (kind === 'safety' && !built.hasExistingData) return { ok: true, skipped: true, summary: built.summary };
     if (!filePath) filePath = await getUnusedLocalBackupPath(kind);
     await worker.request('writeBackup', { filePath });
+    try {
+      // The worker just validated this exact content; seed retention so pruning does not re-read it.
+      backupRetentionCache.set(filePath, await fs.promises.lstat(filePath), { kind });
+    } catch (_) { /* Retention falls back to validating the file. */ }
     return { ok: true, filePath, summary: built.summary };
   } finally {
     await worker.close();
@@ -3390,7 +3384,7 @@ async function writeDownloadedMp3Metadata(filePath, track, createFolderCover) {
   }
   if (Object.keys(tags).length) {
     const result = await runMainWorkerTask('updateMp3', { tags, filePath });
-    if (result !== true) throw (result instanceof Error ? result : new Error('MP3 metadata writer returned an invalid result'));
+    if (result !== true) throw new Error('MP3 metadata writer returned an invalid result');
     const updatedStat = await fs.promises.stat(filePath);
     if (!updatedStat.isFile() || updatedStat.size > MAX_DOWNLOADED_AUDIO_BYTES) throw new Error('Downloaded MP3 exceeds the 512 MB output limit after metadata editing');
   }
@@ -3923,6 +3917,7 @@ registerIpcHandler('save-liked-songs', async (event, likedSongs) => {
 });
 
 registerIpcHandler('export-backup', async (event, extras) => {
+  if (movedFileRelinkCommitInProgress) return { ok: false, error: 'A moved-file relink is in progress.' };
   const stamp = new Date().toISOString().slice(0, 10);
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     filters: [{ name: `${APP_NAME} Backup`, extensions: ['json'] }],
@@ -3930,6 +3925,7 @@ registerIpcHandler('export-backup', async (event, extras) => {
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
   if (backupRestoreInProgress) return { ok: false, error: 'A restore is in progress.' };
+  if (movedFileRelinkCommitInProgress) return { ok: false, error: 'A moved-file relink is in progress.' };
   const operation = startExclusiveBackupOperation('manual', async () => {
     try {
       return await createValidatedBackup('manual', extras, filePath);
@@ -4417,7 +4413,7 @@ registerIpcHandler('backfill-metadata', async (event, musicFiles) => {
   const metadataFields = ['trackMbid', 'year', 'genre', 'discNo', 'discTotal', 'trackTotal', 'replayGainTrackDb', 'replayGainAlbumDb', 'replayGainTrackPeak', 'replayGainAlbumPeak'];
   const candidates = musicFiles.filter((f) => {
     if (!f || typeof f !== 'object' || hasCurrentMetadataBackfill(f)) return false;
-    return !!f.metadataBackfill || !(Number(f.duration) > 0) || metadataFields.some((field) => f[field] === null || f[field] === undefined);
+    return !(Number(f.duration) > 0) || metadataFields.some((field) => f[field] === null || f[field] === undefined);
   });
   let nextIndex = 0;
   async function worker() {
@@ -4449,7 +4445,7 @@ registerIpcHandler('backfill-metadata', async (event, musicFiles) => {
           if (f[field] === null || f[field] === undefined) patch[field] = values[field];
         }
         if (durationMissing && values.duration > 0) patch.duration = values.duration;
-        patch.metadataBackfill = createMetadataBackfillStamp(f);
+        patch.metadataBackfillSig = createMetadataBackfillStamp(f);
         updates.push(patch);
       } catch (e) { /* A malformed audio file is skipped by metadata backfill. */ }
     }
@@ -4783,7 +4779,7 @@ async function updateMp3Metadata(filePath, tags) {
     if (!originalStat.isFile() || originalStat.size > MAX_METADATA_EDIT_BYTES) throw new Error('MP3 file exceeds the 512 MB metadata editing limit');
     await fs.promises.copyFile(filePath, tmpPath, fs.constants.COPYFILE_EXCL);
     const result = await runMainWorkerTask('updateMp3', { tags, filePath: tmpPath });
-    if (result !== true) throw (result instanceof Error ? result : new Error('MP3 metadata writer returned an invalid result'));
+    if (result !== true) throw new Error('MP3 metadata writer returned an invalid result');
     const updatedStat = await fs.promises.stat(tmpPath);
     if (!updatedStat.isFile() || updatedStat.size > MAX_METADATA_EDIT_BYTES) throw new Error('Edited MP3 would exceed the 512 MB metadata editing limit');
     await preserveReplacementMode(tmpPath, originalStat);

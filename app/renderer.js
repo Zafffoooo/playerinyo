@@ -499,8 +499,8 @@ async function mergeBackfilledMetadata(result) {
     if (!patch || !patch.filePath) return;
     var current = index.byPath.get(patch.filePath) || index.byStrippedPath.get(stripFileUrl(patch.filePath));
     if (!current) return;
-    if (patch.metadataBackfill && (!current.metadataBackfill || current.metadataBackfill.v !== patch.metadataBackfill.v || current.metadataBackfill.sig !== patch.metadataBackfill.sig)) {
-      current.metadataBackfill = patch.metadataBackfill;
+    if (typeof patch.metadataBackfillSig === 'string' && current.metadataBackfillSig !== patch.metadataBackfillSig) {
+      current.metadataBackfillSig = patch.metadataBackfillSig;
       changed = true;
     }
     BACKFILL_METADATA_FIELDS.forEach(function (field) {
@@ -525,8 +525,10 @@ function getPendingMetadataBackfillFiles(files) {
   var mainFields = BACKFILL_METADATA_FIELDS.filter(function (field) { return field !== 'addedAtMs' && field !== 'duration'; });
   return (Array.isArray(files) ? files : []).filter(function (file) {
     if (!file || !file.filePath) return false;
-    if (file.metadataBackfill && file.metadataBackfill.v === 1 && file.metadataBackfill.sig === String(file.fileSize) + ':' + String(file.modifiedAtMs)) return false;
-    return !!file.metadataBackfill || !(Number(file.duration) > 0) || mainFields.some(function (field) { return file[field] === null || file[field] === undefined; });
+    // Stamp format "1:<fileSize>:<modifiedAtMs>" is defined in metadata-backfill.js (renderer cannot require it).
+    if (file.metadataBackfillSig === '1:' + String(file.fileSize) + ':' + String(file.modifiedAtMs)) return false;
+    // A stale or missing stamp only warrants a re-parse while something is still missing.
+    return !(Number(file.duration) > 0) || mainFields.some(function (field) { return file[field] === null || file[field] === undefined; });
   });
 }
 function toFileUrl(filePath) {
