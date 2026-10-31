@@ -482,13 +482,19 @@ function readAppDataFile(filePath, fallback, label, validate) {
 
 const fileWriteQueues = new Map();
 const backupSourceLock = createDataFileLock();
+// Bumped when a multi-file transaction (restore, relink) commits. Source writes
+// queued before that commit carry pre-transaction state and are dropped instead
+// of overwriting the committed files.
+let dataTransactionGeneration = 0;
 
 function queueTextFileWrite(filePath, text) {
   const previous = fileWriteQueues.get(filePath) || Promise.resolve();
   const write = () => writeTextFileAtomic(filePath, text);
+  const generation = dataTransactionGeneration;
+  const writeIfCurrent = () => (generation === dataTransactionGeneration ? write() : undefined);
   // Only snapshot sources share the backup/transaction lock; unrelated cache
   // writes keep their independent per-file queues.
-  const next = previous.catch(() => { }).then(() => backupSourceFiles.has(filePath) ? backupSourceLock.run(write) : write());
+  const next = previous.catch(() => { }).then(() => backupSourceFiles.has(filePath) ? backupSourceLock.run(writeIfCurrent) : write());
   fileWriteQueues.set(filePath, next);
   const cleanup = () => { if (fileWriteQueues.get(filePath) === next) fileWriteQueues.delete(filePath); };
   next.then(cleanup, cleanup);
@@ -631,7 +637,11 @@ async function replaceJsonFilesTransactionInner(entries) {
 
 async function replaceJsonFilesTransaction(entries) {
   if (activeDataTransactionPromise) throw new Error('Another data transaction is already active');
-  const transaction = backupSourceLock.run(() => replaceJsonFilesTransactionInner(entries));
+  const transaction = backupSourceLock.run(async () => {
+    const result = await replaceJsonFilesTransactionInner(entries);
+    dataTransactionGeneration++;
+    return result;
+  });
   activeDataTransactionPromise = transaction;
   try { return await transaction; }
   finally { if (activeDataTransactionPromise === transaction) activeDataTransactionPromise = null; }
@@ -2164,7 +2174,10 @@ let knownTrackIndexFlushError = null;
 const knownTrackIndexWriteDrainer = createPendingWriteDrainer();
 const knownTrackIndexPersistence = createCoalescedWrite({
   drainer: knownTrackIndexWriteDrainer,
-  write: () => queueTextFileWrite(KNOWN_TRACK_INDEX_FILE, serializeKnownTrackIndex(knownTrackIndex, MAX_SERIALIZED_BYTES)),
+  write: async () => {
+    await queueTextFileWrite(KNOWN_TRACK_INDEX_FILE, serializeKnownTrackIndex(knownTrackIndex, MAX_SERIALIZED_BYTES));
+    knownTrackIndexFlushError = null;
+  },
   onError: (error) => {
     knownTrackIndexFlushError = error;
     console.error('Failed to persist known-track index:', error);
@@ -2612,7 +2625,7 @@ async function createValidatedBackup(kind, extras, filePath) {
     await worker.request('writeBackup', { filePath });
     try {
       // The worker just validated this exact content; seed retention so pruning does not re-read it.
-      backupRetentionCache.set(filePath, await fs.promises.lstat(filePath), { kind });
+      if (path.dirname(filePath) === BACKUPS_DIR) backupRetentionCache.set(filePath, await fs.promises.lstat(filePath), { kind });
     } catch (_) { /* Retention falls back to validating the file. */ }
     return { ok: true, filePath, summary: built.summary };
   } finally {
@@ -3917,6 +3930,7 @@ registerIpcHandler('save-liked-songs', async (event, likedSongs) => {
 });
 
 registerIpcHandler('export-backup', async (event, extras) => {
+  if (backupRestoreInProgress) return { ok: false, error: 'A restore is in progress.' };
   if (movedFileRelinkCommitInProgress) return { ok: false, error: 'A moved-file relink is in progress.' };
   const stamp = new Date().toISOString().slice(0, 10);
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
