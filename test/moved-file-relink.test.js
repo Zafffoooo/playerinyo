@@ -179,3 +179,26 @@ test('duplicate filenames are always review-only', () => {
   assert.equal(proposals[0].autoSelected, false);
   assert.match(proposals[0].ambiguityReasons.join(' '), /duplicate filename/i);
 });
+
+test('400 moved duplicate-named records stay fast and review-only', () => {
+  const count = 400;
+  const missing = [];
+  const candidates = [];
+  for (let i = 0; i < count; i++) {
+    const meta = { title: `Title ${i}`, artist: `Artist ${i % 7}`, album: `Album ${i}`, fileSize: 1000 + i * 37, duration: 100 + i };
+    missing.push(track(`/old-library/Album ${i}/01.mp3`, meta));
+    candidates.push(track(`/new-library/Album ${i}/01.mp3`, meta));
+  }
+  const started = process.hrtime.bigint();
+  const proposals = buildRelinkProposals(missing, candidates, { oldRoots: ['/old-library'], searchRoot: '/new-library' });
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(elapsedMs < 1000, `relink took ${elapsedMs.toFixed(0)}ms`);
+  assert.equal(proposals.length, count);
+  proposals.forEach((proposal, i) => {
+    assert.equal(proposal.candidate.filePath, `/new-library/Album ${i}/01.mp3`);
+    assert.equal(proposal.ambiguous, true);
+    assert.equal(proposal.autoSelected, false);
+    assert.match(proposal.ambiguityReasons.join(' '), /duplicate filename/i);
+    assert.match(proposal.ambiguityReasons.join(' '), /multiple missing entries/i);
+  });
+});

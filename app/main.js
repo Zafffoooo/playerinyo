@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { parse } = require('csv-parse');
-const NodeID3 = require('node-id3');
+const { createMetadataBackfillStamp, hasCurrentMetadataBackfill } = require('./metadata-backfill');
 const { parseSpotifyAccountFile } = require('./spotify-account-playlists');
 const { createSpotifyAccountClient } = require('./spotify-account-auth');
 const { parseM3u, setLocalRecordExistence, normalizeExportTrack, buildM3u } = require('./playlist-format');
@@ -15,6 +15,16 @@ const { enrichCanonicalDownloadMetadata, getLastfmTrackInfoParams, stripYoutubeT
 const { buildCandidatePools, selectDiscoveryBatch, flattenPools, getCandidateIdentity, getCandidateAliasIdentity, normalizeGenreKey, normalizeText, hasGenreTag, candidateFromTrack } = require('./lastfm-discovery');
 const { createKnownTrackIndex, seedFromHistory, indexTrack, hasKnownTrack, beginLastfmSync, ingestLastfmRecentPage, getLastfmRecentTracksRequest, MAX_SERIALIZED_BYTES, serializeKnownTrackIndex } = require('./known-track-index');
 const { createPendingWriteDrainer } = require('./pending-write-drainer');
+const { createCoalescedWrite } = require('./coalesced-write');
+const { createMainWorkerClient, createSharedWorkerClient, runMainWorkerTask } = require('./main-worker-client');
+const { createDataFileLock } = require('./data-file-lock');
+const { writeTextFileAtomic, MAX_METADATA_EDIT_BYTES, MAX_DOWNLOADED_AUDIO_BYTES } = require('./main-file-helpers');
+const { createBackupRetentionCache } = require('./backup-retention-cache');
+const {
+  MAX_BACKUP_BYTES, MAX_BACKUP_VALUES, MAX_LIBRARY_TRACKS, MAX_PLAYLIST_TRACKS, SENSITIVE_SETTING_KEYS,
+  sanitizeSettingsForBackup, summarizeBackupData, validateBackupJsonShape, validateBackupLibrary,
+  validateBackupPlaylistTrack, validateBackupPlaylists, validateBackupMappings, validateBackupContainers, validateBackupData,
+} = require('./backup-validation');
 const { createLastfmSyncGuard } = require('./lastfm-sync-guard');
 const { isNormalizedPoolValue, getPersistableDiscoveryCacheEntries, setBoundedDiscoveryCacheEntry } = require('./lastfm-discovery-cache');
 const { getLfmSignature, hasLastfmScrobbleCredentials, redactLastfmCredentials } = require('./lastfm-auth');
@@ -304,8 +314,6 @@ const pendingBackupImports = new Map();
 const pendingMovedFileRelinks = new Map();
 const DOWNLOAD_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_DOWNLOAD_SEARCH_CACHE_ENTRIES = 200;
-const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
-const MAX_BACKUP_VALUES = 1000000;
 const BACKUP_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MOVED_FILE_TOKEN_TTL_MS = 5 * 60 * 1000;
 const AUTOMATIC_BACKUP_DEFER_MS = 5 * 60 * 1000;
@@ -317,18 +325,11 @@ const MAX_IMAGE_CACHE_ENTRIES = 12;
 const MAX_CSV_BYTES = 64 * 1024 * 1024;
 const MAX_CSV_RECORDS = 250000;
 const MAX_AUDIO_IPC_BYTES = 128 * 1024 * 1024;
-const MAX_METADATA_EDIT_BYTES = 512 * 1024 * 1024;
-const MAX_DOWNLOADED_AUDIO_BYTES = 512 * 1024 * 1024;
 const MAX_SCAN_AUDIO_FILES = 250000;
-const MAX_LIBRARY_TRACKS = 250000;
-const MAX_PLAYLISTS = 10000;
-const MAX_PLAYLIST_TRACKS = 250000;
-const PLAYLIST_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const EXTERNAL_URL_HOSTS = new Set(['www.youtube.com', 'covers.musichoarders.xyz', 'www.last.fm', 'www.google.com', 'musicbrainz.org']);
 const IMAGE_URL_HOSTS = new Set(['coverartarchive.org', 'archive.org', 'i.scdn.co', 'i.discogs.com', 'i.ytimg.com', 'lh3.googleusercontent.com', 'yt3.googleusercontent.com', 'lastfm.freetls.fastly.net']);
 const APP_ENTRY_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
 const RELEASES_API_URL = 'https://api.github.com/repos/Zafffoooo/playerinyo/releases/latest';
-const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken'];
 const LASTFM_DEBUG_ENABLED = process.env.LASTFM_DEBUG === '1';
 function lastfmCredentialPresence(settings) {
   const source = settings || {};
@@ -479,34 +480,21 @@ function readAppDataFile(filePath, fallback, label, validate) {
   }
 }
 
-function readJsonFileStrict(filePath, fallback) {
-  try {
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('is not a regular data file');
-    if (stat.size > MAX_BACKUP_BYTES) throw new Error(`is larger than the ${MAX_BACKUP_BYTES / (1024 * 1024)} MB backup limit`);
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return fallback;
-    throw new Error(`Could not read ${path.basename(filePath)} for backup: ${e.message || e}`);
-  }
-}
-
 const fileWriteQueues = new Map();
-
-async function writeTextFileAtomic(filePath, text) {
-  const tmpPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  try {
-    await fs.promises.writeFile(tmpPath, text, { encoding: 'utf8', mode: 0o600 });
-    await fs.promises.rename(tmpPath, filePath);
-  } catch (e) {
-    try { await fs.promises.unlink(tmpPath); } catch (_) { /* The failed atomic-write temp file may not exist. */ }
-    throw e;
-  }
-}
+const backupSourceLock = createDataFileLock();
+// Bumped when a multi-file transaction (restore, relink) commits. Source writes
+// queued before that commit carry pre-transaction state and are dropped instead
+// of overwriting the committed files.
+let dataTransactionGeneration = 0;
 
 function queueTextFileWrite(filePath, text) {
   const previous = fileWriteQueues.get(filePath) || Promise.resolve();
-  const next = previous.catch(() => { }).then(() => writeTextFileAtomic(filePath, text));
+  const write = () => writeTextFileAtomic(filePath, text);
+  const generation = dataTransactionGeneration;
+  const writeIfCurrent = () => (generation === dataTransactionGeneration ? write() : undefined);
+  // Only snapshot sources share the backup/transaction lock; unrelated cache
+  // writes keep their independent per-file queues.
+  const next = previous.catch(() => { }).then(() => backupSourceFiles.has(filePath) ? backupSourceLock.run(writeIfCurrent) : write());
   fileWriteQueues.set(filePath, next);
   const cleanup = () => { if (fileWriteQueues.get(filePath) === next) fileWriteQueues.delete(filePath); };
   next.then(cleanup, cleanup);
@@ -649,7 +637,11 @@ async function replaceJsonFilesTransactionInner(entries) {
 
 async function replaceJsonFilesTransaction(entries) {
   if (activeDataTransactionPromise) throw new Error('Another data transaction is already active');
-  const transaction = replaceJsonFilesTransactionInner(entries);
+  const transaction = backupSourceLock.run(async () => {
+    const result = await replaceJsonFilesTransactionInner(entries);
+    dataTransactionGeneration++;
+    return result;
+  });
   activeDataTransactionPromise = transaction;
   try { return await transaction; }
   finally { if (activeDataTransactionPromise === transaction) activeDataTransactionPromise = null; }
@@ -694,32 +686,6 @@ async function recoverInterruptedDataTransaction() {
   }
 }
 
-function sanitizeSettingsForBackup(settings) {
-  const next = { ...(settings || {}) };
-  // A fresh profile may not have created the separate statistics sidecar yet.
-  if (next.listeningStats === undefined) delete next.listeningStats;
-  for (const key of SENSITIVE_SETTING_KEYS) delete next[key];
-  // The cookie contents never enter app state, but a cookies.txt location can
-  // disclose a user name or local directory structure when a backup is shared.
-  delete next.ytdlCookiesFile;
-  delete next.shortcuts;
-  delete next.accentColor;
-  delete next.themeColors;
-  return next;
-}
-
-
-
-
-function summarizeBackupData(data) {
-  return {
-    library: Array.isArray(data && data.library) ? data.library.length : 0,
-    playlists: Array.isArray(data && data.playlists) ? data.playlists.length : 0,
-    likedSongs: Array.isArray(data && data.likedSongs) ? data.likedSongs.length : 0,
-    hasSettings: !!(data && data.settings && typeof data.settings === 'object'),
-    hasMappings: !!(data && data.mappings && typeof data.mappings === 'object'),
-  };
-}
 
 
 
@@ -743,185 +709,9 @@ function summarizeBackupData(data) {
 
 
 
-function validateBackupJsonShape(value, depth, budget) {
-  if (--budget.remaining < 0) throw new Error('Backup contains too many values');
-  if (value === null || typeof value === 'boolean') return;
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error('Backup contains an invalid number');
-    return;
-  }
-  if (typeof value === 'string') {
-    if (value.length > 16 * 1024 * 1024) throw new Error('Backup contains an oversized value');
-    return;
-  }
-  if (depth >= 12) throw new Error('Backup nesting is too deep');
-  if (Array.isArray(value)) {
-    if (value.length > 500000) throw new Error('Backup contains an oversized array');
-    for (const item of value) validateBackupJsonShape(item, depth + 1, budget);
-    return;
-  }
-  if (!isPlainObject(value)) throw new Error('Backup contains an invalid value');
-  const keys = Object.keys(value);
-  if (keys.length > 500000) throw new Error('Backup object has too many fields');
-  for (const key of keys) {
-    if (key === '__proto__' || key === 'prototype' || key === 'constructor') throw new Error('Backup contains a forbidden field');
-    validateBackupJsonShape(value[key], depth + 1, budget);
-  }
-}
 
-function validateBackupStringField(record, field, key, maxLength, options = {}) {
-  if (!Object.prototype.hasOwnProperty.call(record, field)) {
-    if (options.required) throw new Error(`${key}.${field} is required`);
-    return;
-  }
-  const value = record[field];
-  if (value === null && options.nullable) return;
-  if (typeof value !== 'string' || value.length > maxLength || value.includes('\0') || (options.nonEmpty && !value)) {
-    throw new Error(`${key}.${field} must be ${options.nonEmpty ? 'a non-empty ' : 'a '}string of at most ${maxLength} characters`);
-  }
-}
 
-function validateBackupNumberField(record, field, key, min, max, integer = false, nullable = true) {
-  if (!Object.prototype.hasOwnProperty.call(record, field)) return;
-  const value = record[field];
-  if (value === null && nullable) return;
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
-    throw new Error(`${key}.${field} contains an invalid number`);
-  }
-}
 
-function validateBackupLibrary(library) {
-  if (library.length > MAX_LIBRARY_TRACKS) throw new Error(`Backup library contains more than ${MAX_LIBRARY_TRACKS} tracks`);
-  for (let index = 0; index < library.length; index++) {
-    const track = library[index];
-    const key = `library[${index}]`;
-    if (!isPlainObject(track)) throw new Error(`Backup ${key} must be an object`);
-    validateBackupStringField(track, 'filePath', key, 4096, { required: true, nonEmpty: true });
-    validateBackupStringField(track, 'filename', key, 1024, { required: true, nonEmpty: true });
-    for (const field of ['title', 'artist', 'album']) validateBackupStringField(track, field, key, 2000, { required: true });
-    validateBackupStringField(track, 'albumArtist', key, 2000, { nullable: true });
-    validateBackupStringField(track, 'picture', key, 16384, { nullable: true });
-    validateBackupStringField(track, 'genre', key, 2000, { nullable: true });
-    validateBackupStringField(track, 'replayGainMethod', key, 40, { nullable: true });
-    if (Object.prototype.hasOwnProperty.call(track, 'year') && track.year !== null) {
-      if (typeof track.year === 'string') {
-        if (track.year.length > 40 || track.year.includes('\0')) throw new Error(`${key}.year is invalid`);
-      } else if (typeof track.year !== 'number' || !Number.isFinite(track.year)) throw new Error(`${key}.year must be a string, number, or null`);
-    }
-    validateBackupNumberField(track, 'duration', key, 0, 7 * 24 * 60 * 60);
-    for (const field of ['trackNo', 'trackTotal', 'discNo', 'discTotal', '__displayDiscNo']) validateBackupNumberField(track, field, key, 0, 100000, true);
-    validateBackupNumberField(track, 'fileSize', key, 0, Number.MAX_SAFE_INTEGER, true);
-    validateBackupNumberField(track, 'modifiedAtMs', key, 0, Number.MAX_SAFE_INTEGER);
-    validateBackupNumberField(track, 'addedAtMs', key, 0, Number.MAX_SAFE_INTEGER);
-    for (const field of ['replayGainTrackDb', 'replayGainAlbumDb']) validateBackupNumberField(track, field, key, -1000, 1000);
-    for (const field of ['replayGainTrackPeak', 'replayGainAlbumPeak']) validateBackupNumberField(track, field, key, 0, 1000000);
-    if (Object.prototype.hasOwnProperty.call(track, 'isDisabled') && typeof track.isDisabled !== 'boolean') throw new Error(`${key}.isDisabled must be a boolean`);
-  }
-}
-
-const PLAYLIST_TRACK_STRING_FIELDS = new Set([
-  'Song', 'song', 'title', 'Title', 'TITLE', 'Name', 'name',
-  'Artist', 'artist', 'ARTIST', 'Album', 'album', 'ALBUM', 'AlbumArtist',
-  'FilePath', 'filePath', 'Path', 'path', 'Playlist',
-]);
-
-function validateBackupPlaylistTrack(track, key) {
-  if (!isPlainObject(track)) throw new Error(`Backup ${key} must be an object`);
-  const entries = Object.entries(track);
-  if (entries.length > 128) throw new Error(`Backup ${key} has too many CSV fields`);
-  for (const [field, value] of entries) {
-    if (field.length > 256 || field.includes('\0')) throw new Error(`Backup ${key} contains an invalid CSV field name`);
-    if (PLAYLIST_TRACK_STRING_FIELDS.has(field)) {
-      if (typeof value !== 'string' || value.length > (field.toLowerCase().includes('path') ? 4096 : 2000) || value.includes('\0')) {
-        throw new Error(`Backup ${key}.${field} must be a bounded string`);
-      }
-      continue;
-    }
-    if (field === 'AddedAtMs' || field === 'addedAtMs') {
-      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) throw new Error(`Backup ${key}.${field} contains an invalid added timestamp`);
-      continue;
-    }
-    if (typeof value === 'string') {
-      if (value.length > 16384 || value.includes('\0')) throw new Error(`Backup ${key}.${field} contains an oversized string`);
-    } else if (typeof value === 'number') {
-      if (!Number.isFinite(value)) throw new Error(`Backup ${key}.${field} contains an invalid number`);
-    } else if (value !== null && typeof value !== 'boolean') {
-      throw new Error(`Backup ${key}.${field} must be a primitive CSV value`);
-    }
-  }
-}
-
-function validateBackupPlaylists(playlists) {
-  if (playlists.length > MAX_PLAYLISTS) throw new Error(`Backup contains more than ${MAX_PLAYLISTS} playlists`);
-  const playlistIds = new Set();
-  let trackCount = 0;
-  for (let index = 0; index < playlists.length; index++) {
-    const playlist = playlists[index];
-    const key = `playlists[${index}]`;
-    if (!isPlainObject(playlist)) throw new Error(`Backup ${key} must be an object`);
-    validateBackupStringField(playlist, 'id', key, 500, { required: true, nonEmpty: true });
-    validateBackupStringField(playlist, 'name', key, 1000, { required: true, nonEmpty: true });
-    if (playlistIds.has(playlist.id)) throw new Error(`Backup contains duplicate playlist id "${playlist.id}"`);
-    playlistIds.add(playlist.id);
-    if (!Array.isArray(playlist.tracks)) throw new Error(`Backup ${key}.tracks must be an array`);
-    trackCount += playlist.tracks.length;
-    if (trackCount > MAX_PLAYLIST_TRACKS) throw new Error(`Backup contains more than ${MAX_PLAYLIST_TRACKS} playlist tracks`);
-    if (Object.prototype.hasOwnProperty.call(playlist, 'color')) {
-      if (typeof playlist.color !== 'string' || !PLAYLIST_COLOR_PATTERN.test(playlist.color)) throw new Error(`Backup ${key}.color is invalid`);
-    }
-    validateBackupStringField(playlist, 'folderId', key, 100, { nullable: true });
-    validateBackupStringField(playlist, 'cover', key, 2097152, { nullable: true });
-    validateBackupStringField(playlist, 'lastPlayed', key, 100, { nullable: true });
-    validateBackupStringField(playlist, 'sortBy', key, 100, { nullable: true });
-    if (Object.prototype.hasOwnProperty.call(playlist, 'sortDirection') && !['asc', 'desc'].includes(playlist.sortDirection)) throw new Error(`Backup ${key}.sortDirection must be asc or desc`);
-    for (const field of ['pinned', 'isSpecial']) {
-      if (Object.prototype.hasOwnProperty.call(playlist, field) && typeof playlist[field] !== 'boolean') throw new Error(`Backup ${key}.${field} must be a boolean`);
-    }
-    for (let trackIndex = 0; trackIndex < playlist.tracks.length; trackIndex++) {
-      validateBackupPlaylistTrack(playlist.tracks[trackIndex], `${key}.tracks[${trackIndex}]`);
-    }
-  }
-}
-
-function validateBackupMappings(mappings) {
-  const entries = Object.entries(mappings);
-  if (entries.length > MAX_LIBRARY_TRACKS) throw new Error('Backup mappings contain too many entries');
-  for (const [key, value] of entries) {
-    if (!key || key.length > 6000 || key.includes('\0')) throw new Error('Backup mappings contain an invalid key');
-    if (typeof value !== 'string' || !value || value.length > 4096 || value.includes('\0')) throw new Error(`Backup mapping "${key.slice(0, 100)}" must be a bounded path or NO_MATCH string`);
-  }
-}
-
-function validateBackupContainers(data, requireLikedSongs = false) {
-  if (!Array.isArray(data.library)) throw new Error('Backup library must be an array');
-  if (!Array.isArray(data.playlists)) throw new Error('Backup playlists must be an array');
-  if (!isPlainObject(data.mappings)) throw new Error('Backup mappings must be an object');
-  if (!isPlainObject(data.settings)) throw new Error('Backup settings must be an object');
-  if (requireLikedSongs && !Array.isArray(data.likedSongs)) throw new Error('Backup liked songs must be an array');
-  if (data.likedSongs !== undefined) {
-    if (!Array.isArray(data.likedSongs) || data.likedSongs.length > MAX_LIBRARY_TRACKS) throw new Error('Backup liked songs are invalid');
-    if (sanitizeLikedSongs(data.likedSongs).length !== data.likedSongs.length) throw new Error('Backup liked songs contain invalid entries');
-  }
-  validateBackupLibrary(data.library);
-  validateBackupPlaylists(data.playlists);
-  validateBackupMappings(data.mappings);
-}
-
-function validateBackupData(parsed) {
-  if (!isPlainObject(parsed)) throw new Error('Backup root must be an object');
-  let data = parsed;
-  if (Object.prototype.hasOwnProperty.call(parsed, 'data')) {
-    if (parsed.app !== APP_NAME || parsed.schemaVersion !== 1) throw new Error('Unsupported backup format or version');
-    data = parsed.data;
-  } else {
-    const legacyFields = ['library', 'playlists', 'mappings', 'settings'];
-    if (!legacyFields.every(key => Object.prototype.hasOwnProperty.call(parsed, key))) throw new Error('Unsupported legacy backup format');
-  }
-  if (!isPlainObject(data)) throw new Error('Backup data must be an object');
-  validateBackupJsonShape(data, 0, { remaining: MAX_BACKUP_VALUES });
-  validateBackupContainers(data);
-  return { ...data, settings: sanitizeImportedSettings(data.settings) };
-}
 
 function validateAppStateSnapshot(snapshot) {
   if (!isPlainObject(snapshot)) throw new Error('App state snapshot must be an object');
@@ -1319,9 +1109,11 @@ app.on('before-quit', (event) => {
   // Window-all-closed and OS quit paths do not necessarily pass through the
   // renderer close handshake. Drain the bounded known-index write too.
   Promise.resolve()
+    .then(() => knownTrackIndexPersistence.flush().catch((error) => console.error('Failed to persist known-track index before quit:', error)))
     .then(() => knownTrackIndexWriteDrainer.drain())
     .then(() => waitForActiveDownloadProcesses())
     .then(() => waitForMetadataWrites())
+    .then(() => waitForActiveBackupOperation())
     .then(() => waitForPendingDataWrites())
     .catch((error) => console.error('Failed to drain data writes before quit:', error))
     .finally(() => app.exit(0));
@@ -2285,6 +2077,7 @@ const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 configureDiscordCoverCache(path.join(app.getPath('userData'), 'discord-cover-cache.json'));
 const LISTENING_STATS_FILE = path.join(app.getPath('userData'), 'listening-stats.json');
 const LIKED_SONGS_FILE = path.join(app.getPath('userData'), 'liked-songs.json');
+const backupSourceFiles = new Set([LIBRARY_FILE, PLAYLISTS_FILE, MAPPINGS_FILE, SETTINGS_FILE, LISTENING_STATS_FILE, LIKED_SONGS_FILE]);
 const RESTORE_MANIFEST_FILE = path.join(app.getPath('userData'), '.backup-restore-transaction.json');
 const COVERS_DIR = path.join(app.getPath('userData'), 'covers');
 const BACKUPS_DIR = path.join(app.getPath('userData'), 'backups');
@@ -2377,8 +2170,19 @@ const LASTFM_POOL_TTL_MS = 12 * 60 * 60 * 1000;
 
 let knownTrackIndex = null;
 let knownTrackIndexLoadPromise = null;
-let knownTrackIndexWritePromise = Promise.resolve();
+let knownTrackIndexFlushError = null;
 const knownTrackIndexWriteDrainer = createPendingWriteDrainer();
+const knownTrackIndexPersistence = createCoalescedWrite({
+  drainer: knownTrackIndexWriteDrainer,
+  write: async () => {
+    await queueTextFileWrite(KNOWN_TRACK_INDEX_FILE, serializeKnownTrackIndex(knownTrackIndex, MAX_SERIALIZED_BYTES));
+    knownTrackIndexFlushError = null;
+  },
+  onError: (error) => {
+    knownTrackIndexFlushError = error;
+    console.error('Failed to persist known-track index:', error);
+  },
+});
 let lastfmKnownSyncPromise = null;
 let lastfmKnownSyncTimer = null;
 const lastfmKnownSyncGuard = createLastfmSyncGuard();
@@ -2442,11 +2246,14 @@ async function ensureKnownTrackIndex() {
   return knownTrackIndexLoadPromise;
 }
 
+// Writes are deferred, so a failure cannot be reported to the call that
+// caused it. Remember the last flush failure and reject the next call once
+// (the write stays dirty and is retried by that call's schedule).
 function persistKnownTrackIndex() {
-  if (!knownTrackIndex) return Promise.resolve();
-  const snapshot = serializeKnownTrackIndex(knownTrackIndex, MAX_SERIALIZED_BYTES);
-  knownTrackIndexWritePromise = knownTrackIndexWriteDrainer.enqueue(() => queueTextFileWrite(KNOWN_TRACK_INDEX_FILE, snapshot));
-  return knownTrackIndexWritePromise;
+  if (knownTrackIndex) knownTrackIndexPersistence.schedule();
+  const error = knownTrackIndexFlushError;
+  knownTrackIndexFlushError = null;
+  return error ? Promise.reject(error) : Promise.resolve();
 }
 
 async function seedKnownTrackIndexFromSettings() {
@@ -2742,47 +2549,51 @@ async function ensureBackupDirectory() {
   return BACKUPS_DIR;
 }
 
-async function getValidatedAutomaticBackupNames() {
+const backupRetentionCache = createBackupRetentionCache();
+
+async function getValidatedBackupNames(kind) {
   let directoryStat;
   try { directoryStat = await fs.promises.lstat(BACKUPS_DIR); }
   catch (e) { if (e.code === 'ENOENT') return []; throw e; }
   if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error('The backup path is not a regular directory');
   const entries = await fs.promises.readdir(BACKUPS_DIR, { withFileTypes: true });
+  const isMatchingFilename = kind === 'automatic' ? isAutomaticBackupFilename : isSafetyBackupFilename;
   const names = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || entry.isSymbolicLink() || !isAutomaticBackupFilename(entry.name)) continue;
-    const filePath = path.join(BACKUPS_DIR, entry.name);
-    try {
-      const stat = await fs.promises.lstat(filePath);
-      if (!stat.isFile() || stat.isSymbolicLink()) continue;
-      const parsed = readJsonFileStrict(filePath, null);
-      validateBackupData(parsed);
-      if (parsed.kind !== undefined && parsed.kind !== 'automatic') continue;
-      names.push(entry.name);
-    } catch (e) {
-      console.warn('Ignoring invalid automatic backup during retention:', entry.name, e.message || e);
+  // Recreates the worker if one crashes, so one bad file cannot fail the rest.
+  const worker = createSharedWorkerClient({ create: createMainWorkerClient });
+  try {
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.isSymbolicLink() || !isMatchingFilename(entry.name)) continue;
+      const filePath = path.join(BACKUPS_DIR, entry.name);
+      try {
+        const stat = await fs.promises.lstat(filePath);
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        let metadata = backupRetentionCache.get(filePath, stat);
+        if (!metadata) {
+          metadata = await worker.request('inspectBackup', { filePath });
+          // Cache only if the same regular file survived validation unchanged.
+          const after = await fs.promises.lstat(filePath);
+          if (!after.isFile() || after.isSymbolicLink() || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs || after.ino !== stat.ino || after.dev !== stat.dev) continue;
+          backupRetentionCache.set(filePath, stat, metadata);
+        }
+        if (metadata.kind === kind || (kind === 'automatic' && metadata.kind === undefined)) names.push(entry.name);
+      } catch (e) {
+        console.warn(`Ignoring invalid ${kind} backup during retention:`, entry.name, e.message || e);
+      }
+      await new Promise((resolve) => setImmediate(resolve));
     }
+    return names;
+  } finally {
+    await worker.close();
   }
-  return names;
 }
 
-async function getValidatedSafetyBackupNames() {
-  let entries;
-  try { entries = await fs.promises.readdir(BACKUPS_DIR, { withFileTypes: true }); }
-  catch (e) { if (e.code === 'ENOENT') return []; throw e; }
-  const names = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || entry.isSymbolicLink() || !isSafetyBackupFilename(entry.name)) continue;
-    const filePath = path.join(BACKUPS_DIR, entry.name);
-    try {
-      const stat = await fs.promises.lstat(filePath);
-      if (!stat.isFile() || stat.isSymbolicLink()) continue;
-      const parsed = readJsonFileStrict(filePath, null);
-      validateBackupData(parsed);
-      if (parsed.kind === 'safety') names.push(entry.name);
-    } catch (e) { console.warn('Ignoring invalid safety backup during retention:', entry.name, e.message || e); }
-  }
-  return names;
+function getValidatedAutomaticBackupNames() {
+  return getValidatedBackupNames('automatic');
+}
+
+function getValidatedSafetyBackupNames() {
+  return getValidatedBackupNames('safety');
 }
 
 async function ensureAutomaticBackupHistoryLoaded() {
@@ -2798,53 +2609,27 @@ async function ensureAutomaticBackupHistoryLoaded() {
   finally { automaticBackupHistoryPromise = null; }
 }
 
-function hasExistingBackupData(data, storedSettings, storedListeningStats) {
-  return !!(
-    data.library.length
-    || data.playlists.length
-    || Object.keys(data.mappings).length
-    || data.likedSongs.length
-    || Object.keys(storedSettings).length
-    || Object.keys(storedListeningStats || {}).length
-  );
-}
-
-async function buildValidatedBackupPayload(kind, extras) {
+async function createValidatedBackup(kind, extras, filePath) {
   await waitForPendingDataWrites();
-  const storedSettings = readJsonFileStrict(SETTINGS_FILE, {});
-  const storedListeningStats = readJsonFileStrict(LISTENING_STATS_FILE, {});
-  if (!isPlainObject(storedSettings)) throw new Error('Could not create backup: settings.json must contain an object');
-  if (!isPlainObject(storedListeningStats)) throw new Error('Could not create backup: listening-stats.json must contain an object');
-  const data = {
-    library: readJsonFileStrict(LIBRARY_FILE, []),
-    playlists: readJsonFileStrict(PLAYLISTS_FILE, []),
-    mappings: readJsonFileStrict(MAPPINGS_FILE, {}),
-    settings: sanitizeSettingsForBackup(appSettings),
-    likedSongs: readJsonFileStrict(LIKED_SONGS_FILE, extras && Array.isArray(extras.likedSongs) ? extras.likedSongs : []),
-    exportedFrom: APP_NAME,
-  };
-  const payload = {
-    app: APP_NAME,
-    schemaVersion: 1,
-    kind,
-    exportedAt: new Date().toISOString(),
-    data,
-  };
-  validateBackupData(payload);
-  const text = JSON.stringify(payload, null, 2);
-  if (Buffer.byteLength(text, 'utf8') > MAX_BACKUP_BYTES) throw new Error(`Backup exceeds the ${MAX_BACKUP_BYTES / (1024 * 1024)} MB export limit`);
-  return { payload, text, data, summary: summarizeBackupData(data), hasExistingData: hasExistingBackupData(data, storedSettings, storedListeningStats) };
-}
-
-async function writeValidatedBackupFile(filePath, built) {
-  await writeTextFileAtomic(filePath, built.text);
+  const worker = createMainWorkerClient();
   try {
-    const writtenPayload = readJsonFileStrict(filePath, null);
-    validateBackupData(writtenPayload);
-    if (!writtenPayload || writtenPayload.kind !== built.payload.kind) throw new Error('Written backup kind does not match the requested backup');
-  } catch (e) {
-    await fs.promises.rm(filePath, { force: true }).catch(() => { });
-    throw new Error(`Written backup could not be validated: ${e.message || e}`);
+    const built = await backupSourceLock.run(() => worker.request('buildBackup', {
+      paths: { settings: SETTINGS_FILE, listeningStats: LISTENING_STATS_FILE, library: LIBRARY_FILE, playlists: PLAYLISTS_FILE, mappings: MAPPINGS_FILE, likedSongs: LIKED_SONGS_FILE },
+      settings: sanitizeSettingsForBackup(appSettings),
+      fallbackLikedSongs: extras && Array.isArray(extras.likedSongs) ? extras.likedSongs : [],
+      kind,
+      appName: APP_NAME,
+    }));
+    if (kind === 'safety' && !built.hasExistingData) return { ok: true, skipped: true, summary: built.summary };
+    if (!filePath) filePath = await getUnusedLocalBackupPath(kind);
+    await worker.request('writeBackup', { filePath });
+    try {
+      // The worker just validated this exact content; seed retention so pruning does not re-read it.
+      if (path.dirname(filePath) === BACKUPS_DIR) backupRetentionCache.set(filePath, await fs.promises.lstat(filePath), { kind });
+    } catch (_) { /* Retention falls back to validating the file. */ }
+    return { ok: true, filePath, summary: built.summary };
+  } finally {
+    await worker.close();
   }
 }
 
@@ -2860,15 +2645,13 @@ async function getUnusedLocalBackupPath(kind) {
 }
 
 async function createLocalBackup(kind, extras) {
-  const built = await buildValidatedBackupPayload(kind, extras);
-  if (kind === 'safety' && !built.hasExistingData) return { ok: true, skipped: true, summary: built.summary };
-  const filePath = await getUnusedLocalBackupPath(kind);
-  await writeValidatedBackupFile(filePath, built);
+  const result = await createValidatedBackup(kind, extras);
+  if (result.skipped) return result;
   if (kind === 'safety') {
     try { await pruneSafetyBackups(); }
     catch (e) { console.warn('Safety backup was created, but old safety backups could not be pruned:', e.message || e); }
   }
-  return { ok: true, filePath, summary: built.summary };
+  return result;
 }
 
 async function pruneAutomaticBackups() {
@@ -2880,6 +2663,7 @@ async function pruneAutomaticBackups() {
     const stat = await fs.promises.lstat(filePath);
     if (!stat.isFile() || stat.isSymbolicLink()) continue;
     await fs.promises.unlink(filePath);
+    backupRetentionCache.delete(filePath);
   }
   return namesToPrune.length;
 }
@@ -2895,7 +2679,10 @@ async function pruneSafetyBackups() {
     if (!isSafetyBackupFilename(name) || path.basename(name) !== name) continue;
     const filePath = path.join(BACKUPS_DIR, name);
     const stat = await fs.promises.lstat(filePath);
-    if (stat.isFile() && !stat.isSymbolicLink()) await fs.promises.unlink(filePath);
+    if (stat.isFile() && !stat.isSymbolicLink()) {
+      await fs.promises.unlink(filePath);
+      backupRetentionCache.delete(filePath);
+    }
   }
   return namesToPrune.length;
 }
@@ -3609,8 +3396,8 @@ async function writeDownloadedMp3Metadata(filePath, track, createFolderCover) {
     }
   }
   if (Object.keys(tags).length) {
-    const result = NodeID3.update(tags, filePath);
-    if (result !== true) throw (result instanceof Error ? result : new Error('MP3 metadata writer returned an invalid result'));
+    const result = await runMainWorkerTask('updateMp3', { tags, filePath });
+    if (result !== true) throw new Error('MP3 metadata writer returned an invalid result');
     const updatedStat = await fs.promises.stat(filePath);
     if (!updatedStat.isFile() || updatedStat.size > MAX_DOWNLOADED_AUDIO_BYTES) throw new Error('Downloaded MP3 exceeds the 512 MB output limit after metadata editing');
   }
@@ -4143,6 +3930,8 @@ registerIpcHandler('save-liked-songs', async (event, likedSongs) => {
 });
 
 registerIpcHandler('export-backup', async (event, extras) => {
+  if (backupRestoreInProgress) return { ok: false, error: 'A restore is in progress.' };
+  if (movedFileRelinkCommitInProgress) return { ok: false, error: 'A moved-file relink is in progress.' };
   const stamp = new Date().toISOString().slice(0, 10);
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     filters: [{ name: `${APP_NAME} Backup`, extensions: ['json'] }],
@@ -4150,11 +3939,10 @@ registerIpcHandler('export-backup', async (event, extras) => {
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
   if (backupRestoreInProgress) return { ok: false, error: 'A restore is in progress.' };
+  if (movedFileRelinkCommitInProgress) return { ok: false, error: 'A moved-file relink is in progress.' };
   const operation = startExclusiveBackupOperation('manual', async () => {
     try {
-      const built = await buildValidatedBackupPayload('manual', extras);
-      await writeValidatedBackupFile(filePath, built);
-      return { ok: true, filePath, summary: built.summary };
+      return await createValidatedBackup('manual', extras, filePath);
     } catch (e) {
       return { ok: false, error: e.message || String(e) };
     }
@@ -4638,7 +4426,7 @@ registerIpcHandler('backfill-metadata', async (event, musicFiles) => {
   const updates = [];
   const metadataFields = ['trackMbid', 'year', 'genre', 'discNo', 'discTotal', 'trackTotal', 'replayGainTrackDb', 'replayGainAlbumDb', 'replayGainTrackPeak', 'replayGainAlbumPeak'];
   const candidates = musicFiles.filter((f) => {
-    if (!f || typeof f !== 'object') return false;
+    if (!f || typeof f !== 'object' || hasCurrentMetadataBackfill(f)) return false;
     return !(Number(f.duration) > 0) || metadataFields.some((field) => f[field] === null || f[field] === undefined);
   });
   let nextIndex = 0;
@@ -4646,15 +4434,13 @@ registerIpcHandler('backfill-metadata', async (event, musicFiles) => {
     while (true) {
       const f = candidates[nextIndex++];
       if (!f) return;
-    if (!f || typeof f !== 'object') continue;
-    const filePath = normalizePathInput(f.filePath);
-    if (!filePath || !path.isAbsolute(filePath)) continue;
-    if (!isExistingFileWithExt(filePath, AUDIO_EXTENSIONS)) continue;
-    const patch = { filePath };
-    const durationMissing = !(Number(f.duration) > 0);
-    if (durationMissing || metadataFields.some((field) => f[field] === null || f[field] === undefined)) {
+      const filePath = normalizePathInput(f.filePath);
+      if (!filePath || !path.isAbsolute(filePath)) continue;
+      if (!isExistingFileWithExt(filePath, AUDIO_EXTENSIONS)) continue;
+      const patch = { filePath };
+      const durationMissing = !(Number(f.duration) > 0);
       try {
-        const metadata = await mm.parseFile(filePath, { duration: durationMissing });
+        const metadata = await mm.parseFile(filePath, { duration: durationMissing, skipCovers: true });
         const rg = getReplayGainFields(metadata);
         const values = {
           duration: Number(metadata.format.duration) || 0,
@@ -4673,9 +4459,9 @@ registerIpcHandler('backfill-metadata', async (event, musicFiles) => {
           if (f[field] === null || f[field] === undefined) patch[field] = values[field];
         }
         if (durationMissing && values.duration > 0) patch.duration = values.duration;
+        patch.metadataBackfillSig = createMetadataBackfillStamp(f);
+        updates.push(patch);
       } catch (e) { /* A malformed audio file is skipped by metadata backfill. */ }
-    }
-    if (Object.keys(patch).length > 1) updates.push(patch);
     }
   }
   await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, () => worker()));
@@ -5006,8 +4792,8 @@ async function updateMp3Metadata(filePath, tags) {
     const originalStat = await fs.promises.stat(filePath);
     if (!originalStat.isFile() || originalStat.size > MAX_METADATA_EDIT_BYTES) throw new Error('MP3 file exceeds the 512 MB metadata editing limit');
     await fs.promises.copyFile(filePath, tmpPath, fs.constants.COPYFILE_EXCL);
-    const result = NodeID3.update(tags, tmpPath);
-    if (result !== true) throw (result instanceof Error ? result : new Error('MP3 metadata writer returned an invalid result'));
+    const result = await runMainWorkerTask('updateMp3', { tags, filePath: tmpPath });
+    if (result !== true) throw new Error('MP3 metadata writer returned an invalid result');
     const updatedStat = await fs.promises.stat(tmpPath);
     if (!updatedStat.isFile() || updatedStat.size > MAX_METADATA_EDIT_BYTES) throw new Error('Edited MP3 would exceed the 512 MB metadata editing limit');
     await preserveReplacementMode(tmpPath, originalStat);
