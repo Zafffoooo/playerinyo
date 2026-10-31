@@ -215,3 +215,73 @@ function initImportReviewControls() {
   var versionClose = $('version-picker-close');
   if (versionClose) versionClose.addEventListener('click', function () { versionPickerRequest++; hideModal($('version-picker-modal')); });
 }
+
+// Download queue / import review render helpers (moved here to keep renderer-downloads-ui.js within the size limit).
+// item -> <small> node of its rendered row, so progress ticks patch text in place.
+var downloadQueueItemDetailNodes = new WeakMap();
+var downloadQueueProgressItems = new Set();
+function getDownloadQueueItemDetailHtml(item) {
+  var progressText = item.status === 'downloading' && typeof item.downloadPercent === 'number' ? ' • ' + Math.round(item.downloadPercent) + '%' : '';
+  var outputInfo = item.status === 'done' && item.container
+    ? ' • ' + esc(String(item.container).toUpperCase()) + (item.codec ? ' / ' + esc(String(item.codec)) : '')
+    : '';
+  return esc(item.artist || '') + progressText + outputInfo + (item.error ? ' • ' + esc(item.error) : '');
+}
+function updateDownloadDockBar() {
+  var dockBar = $('download-dock-bar');
+  if (!dockBar) return;
+  var running = getDownloadQueueRunningJob();
+  var currentItem = running && (running.items || []).find(function (item) { return item.status === 'downloading' || item.status === 'searching'; });
+  dockBar.style.width = currentItem && Number.isFinite(currentItem.downloadPercent) ? Math.max(0, Math.min(100, currentItem.downloadPercent)) + '%' : '0%';
+}
+// Progress-only tick: patch the dock bar and the one visible item row; no list rebuild.
+function renderDownloadQueueProgress(item) {
+  updateDownloadDockBar();
+  var small = item && downloadQueueItemDetailNodes.get(item);
+  if (small && small.isConnected) small.innerHTML = getDownloadQueueItemDetailHtml(item);
+  persistDownloadQueueStateSoon();
+}
+
+var playlistImportRowNodes = new WeakMap();
+var playlistImportReviewFrame = null;
+function getPlaylistImportRowSignature(row, flatIndex, matched, localCandidate, downloadable, checked, busy) {
+  var candidates = (row.__downloadCandidates || []).map(function (c) { return [c.webpageUrl || c.url || '', c.title || '', c.uploader || '', c.duration || 0, c.score, c.thumbnail || '', getImportCandidateConfidence(c)]; });
+  var picked = row.__downloadCandidate;
+  return JSON.stringify([flatIndex, matched ? matched.filePath || 1 : 0, localCandidate, downloadable, checked, busy, getImportTrackTitle(row), getImportTrackArtist(row), getImportTrackAlbum(row), row.SourceStatus || '', row.SourceReason || '', row.SourceLocation || '', isM3uImportRecord(row), row.__candidateLoading, row.__candidateQueued, row.__downloadStatus || '', row.__downloadError || '', row.__importDiff || '', row.__candidateNotice || '', row.__candidateError || '', picked ? [picked.webpageUrl || picked.url || '', picked.title || '', picked.uploader || '', picked.duration || 0, getImportCandidateConfidence(picked)] : null, candidates]);
+}
+// rAF-coalesced render for per-track progress during bulk candidate search.
+function schedulePlaylistImportReview() {
+  if (playlistImportReviewFrame) return;
+  playlistImportReviewFrame = requestAnimationFrame(function () {
+    playlistImportReviewFrame = null;
+    renderPlaylistImportReview();
+  });
+}
+// Keyed reuse: a row's DOM is rebuilt only when something it renders changed.
+function syncPlaylistImportRowControls(node, checked, disabled) {
+  var cb = node.querySelector('.playlist-import-row-check');
+  if (!cb) return;
+  if (cb.checked !== !!checked) cb.checked = !!checked;
+  if (cb.disabled !== !!disabled) cb.disabled = !!disabled;
+}
+// Live controls can change without a re-render, so always re-sync them from data on reuse.
+function getReusablePlaylistImportRow(row, signature, checked, disabled) {
+  var cached = playlistImportRowNodes.get(row);
+  if (!cached || cached.signature !== signature) return null;
+  syncPlaylistImportRowControls(cached.node, checked, disabled);
+  return cached.node;
+}
+function createPlaylistImportRowNode(row, signature, flatIndex, matched, localCandidate) {
+  var div = document.createElement('div');
+  div.className = 'playlist-import-row' + (matched ? ' matched' : '') + (localCandidate ? ' local-reference' : '') + (row.__downloadStatus === 'downloading' ? ' downloading' : '') + (row.__downloadStatus === 'failed' ? ' failed' : '');
+  div.dataset.flatIndex = String(flatIndex);
+  playlistImportRowNodes.set(row, { node: div, signature: signature });
+  return div;
+}
+function reconcileChildren(list, nodes) {
+  nodes.forEach(function (node, i) {
+    var current = list.children[i];
+    if (current !== node) list.insertBefore(node, current || null);
+  });
+  while (list.children.length > nodes.length) list.removeChild(list.lastChild);
+}

@@ -560,7 +560,27 @@ function likedRecordMatches(record, track) {
   if (typeof record === 'string') return !!(track && track.matchedFile && record === track.matchedFile.filePath);
   return !!(record && typeof record === 'object' && record.identity && record.identity === likedIdentity(track));
 }
-function isTrackLiked(track) { return state.likedSongs.some(function (record) { return likedRecordMatches(record, track); }); }
+// Cached lookup sets; rebuilt when likedSongs is replaced, its length changes, or a
+// toggle explicitly invalidates (unlike + like between lookups keeps the same length).
+var likedLookupCache = { source: null, length: -1, paths: null, identities: null };
+function getLikedLookup() {
+  var list = state.likedSongs;
+  if (likedLookupCache.source === list && likedLookupCache.length === list.length) return likedLookupCache;
+  var paths = new Set(); var identities = new Set();
+  list.forEach(function (record) {
+    if (typeof record === 'string') paths.add(record);
+    else if (record && typeof record === 'object' && record.identity) identities.add(record.identity);
+  });
+  likedLookupCache = { source: list, length: list.length, paths: paths, identities: identities };
+  return likedLookupCache;
+}
+function isTrackLiked(track) {
+  var lookup = getLikedLookup();
+  if (track && track.matchedFile && lookup.paths.has(track.matchedFile.filePath)) return true;
+  if (!lookup.identities.size) return false;
+  var identity = likedIdentity(track);
+  return !!identity && lookup.identities.has(identity);
+}
 function likedDateKey(record) { return typeof record === 'string' ? 'path:' + record : record && record.identity ? 'identity:' + record.identity : ''; }
 function likedAtMs(record) {
   var key = likedDateKey(record);
@@ -585,7 +605,8 @@ function toggleTrackLikeByIdentity(track) {
     appSettings.likedSongDates[likedDateKey(record)] = new Date().toISOString();
   }
   else return false;
-  trackRenderState.likedSongsSet = new Set(state.likedSongs.filter(function (item) { return typeof item === 'string'; }));
+  likedLookupCache.source = null;
+  trackRenderState.likedSongsSet =new Set(state.likedSongs.filter(function (item) { return typeof item === 'string'; }));
   persistInBackground(persistLikedSongs(state.likedSongs));
   saveSettingsDebounced(150);
   return true;
@@ -1397,10 +1418,23 @@ function getMusicalIdentity(track) {
   var title = normalizeMusicalIdentityText(track && (track.Song || track.title));
   return artist && title ? 'name:' + artist + '::' + title : '';
 }
+// First library file (library order) per musical identity, cached per library index.
+function getMusicalIdentityIndex() {
+  var libIndex = getLibraryIndex();
+  if (libIndex.musicalIdentityIndex) return libIndex.musicalIdentityIndex;
+  var map = new Map();
+  for (var i = 0; i < state.musicFiles.length; i++) {
+    var file = state.musicFiles[i];
+    var id = getMusicalIdentity(file);
+    if (id && !map.has(id)) map.set(id, file);
+  }
+  libIndex.musicalIdentityIndex = map;
+  return map;
+}
 function findLocalMusicalIdentity(track) {
   var identity = getMusicalIdentity(track);
   if (!identity) return null;
-  return state.musicFiles.find(function (file) { return getMusicalIdentity(file) === identity; }) || null;
+  return getMusicalIdentityIndex().get(identity) || null;
 }
 function isPlaylistRecordMissing(row) {
   return !findPlaylistRecordMatch(row);
@@ -1802,10 +1836,13 @@ function updateDownloadQueueItemProgress(data) {
   var item = downloadQueueItemsByRequestId.get(data.requestId);
   if (!item) return;
   item.downloadPercent = Math.max(0, Math.min(100, Number(data.percent || 0)));
+  downloadQueueProgressItems.add(item);
   if (downloadQueueProgressFrame) return;
   downloadQueueProgressFrame = requestAnimationFrame(function () {
     downloadQueueProgressFrame = null;
-    renderDownloadQueue();
+    var pending = Array.from(downloadQueueProgressItems);
+    downloadQueueProgressItems.clear();
+    pending.forEach(renderDownloadQueueProgress);
   });
 }
 function isDownloadQueueItemReviewOpen(job, itemIndex) {
