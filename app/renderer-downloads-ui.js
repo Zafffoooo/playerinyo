@@ -831,7 +831,7 @@ function renderPlaylistImportReview() {
     var busy = !!pendingPlaylistImport.finishing || playlistImportSearching || !!row.__candidateLoading;
     if (downloadable && row.__downloadCandidates && row.__downloadCandidates.length && !row.__downloadCandidate) reviewCount++;
     var signature = getPlaylistImportRowSignature(row, flatIndex, matched, localCandidate, downloadable, checked, busy);
-    var reused = getReusablePlaylistImportRow(row, signature);
+    var reused = getReusablePlaylistImportRow(row, signature, checked, !(checkable && !busy));
     if (reused) { nodes.push(reused); return; }
     var div = createPlaylistImportRowNode(row, signature, flatIndex, matched, localCandidate);
     nodes.push(div);
@@ -864,7 +864,7 @@ function renderPlaylistImportReview() {
     if (cb) cb.addEventListener('change', function () {
       if (localCandidate) row.__addLocalSelected = cb.checked;
       else row.__downloadSelected = cb.checked;
-      updatePlaylistImportActions();
+      playlistImportRowNodes.delete(row); updatePlaylistImportActions();
     });
     div.addEventListener('click', function (e) {
       if (!checkable || busy || !cb || e.target.closest('button,input,.playlist-import-candidates,.playlist-import-picked-candidate')) return;

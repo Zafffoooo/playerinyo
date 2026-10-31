@@ -106,3 +106,15 @@ test('fuzzy pool matching keeps findMatchingFile priority and ambiguity semantic
   assert.equal(find('Stem Name', 'Solo', ''), files[3]); // filename fuzzy fallback
   assert.equal(find('Nope', 'Nobody', 'Nothing'), null);
 });
+
+test('reused import-review row re-syncs a stale checkbox from current data', () => {
+  const c = vm.createContext({ playlistImportRowNodes: new WeakMap() });
+  load(c, 'renderer-import-review.js', ['syncPlaylistImportRowControls', 'getReusablePlaylistImportRow']);
+  const cb = { checked: false, disabled: true };
+  const node = { querySelector: () => cb };
+  const row = {};
+  c.playlistImportRowNodes.set(row, { node, signature: 'sig' });
+  assert.equal(c.getReusablePlaylistImportRow(row, 'other', true, false), null);
+  assert.equal(c.getReusablePlaylistImportRow(row, 'sig', true, false), node);
+  assert.deepEqual({ checked: cb.checked, disabled: cb.disabled }, { checked: true, disabled: false });
+});

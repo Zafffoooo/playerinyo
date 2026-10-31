@@ -258,9 +258,18 @@ function schedulePlaylistImportReview() {
   });
 }
 // Keyed reuse: a row's DOM is rebuilt only when something it renders changed.
-function getReusablePlaylistImportRow(row, signature) {
+function syncPlaylistImportRowControls(node, checked, disabled) {
+  var cb = node.querySelector('.playlist-import-row-check');
+  if (!cb) return;
+  if (cb.checked !== !!checked) cb.checked = !!checked;
+  if (cb.disabled !== !!disabled) cb.disabled = !!disabled;
+}
+// Live controls can change without a re-render, so always re-sync them from data on reuse.
+function getReusablePlaylistImportRow(row, signature, checked, disabled) {
   var cached = playlistImportRowNodes.get(row);
-  return cached && cached.signature === signature ? cached.node : null;
+  if (!cached || cached.signature !== signature) return null;
+  syncPlaylistImportRowControls(cached.node, checked, disabled);
+  return cached.node;
 }
 function createPlaylistImportRowNode(row, signature, flatIndex, matched, localCandidate) {
   var div = document.createElement('div');
