@@ -9,13 +9,16 @@ const MAX_LIBRARY_TRACKS = 250000;
 const MAX_PLAYLISTS = 10000;
 const MAX_PLAYLIST_TRACKS = 250000;
 const PLAYLIST_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
-const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken'];
+const SENSITIVE_SETTING_KEYS = ['lastfmApiKey', 'lastfmSharedSecret', 'lastfmSessionKey', 'discogsToken', 'listenbrainzToken'];
 
 function sanitizeSettingsForBackup(settings) {
   const next = { ...(settings || {}) };
-  // A fresh profile may not have created the separate statistics sidecar yet.
-  if (next.listeningStats === undefined) delete next.listeningStats;
+  for (const key of Object.keys(next)) {
+    if (next[key] === undefined) delete next[key];
+  }
   for (const key of SENSITIVE_SETTING_KEYS) delete next[key];
+  delete next.youtubePlaylistRefreshToken;
+  delete next.youtubeFollowedPlaylists;
   // Cookie locations can disclose local directory structure in shared backups.
   delete next.ytdlCookiesFile;
   delete next.shortcuts;
@@ -29,6 +32,8 @@ function summarizeBackupData(data) {
     library: Array.isArray(data && data.library) ? data.library.length : 0,
     playlists: Array.isArray(data && data.playlists) ? data.playlists.length : 0,
     likedSongs: Array.isArray(data && data.likedSongs) ? data.likedSongs.length : 0,
+    ...(data?.youtubeArchive !== undefined && { youtubeArchive: data.youtubeArchive.length }),
+    ...(data?.youtubeLinks !== undefined && { youtubeLinks: data.youtubeLinks.length }),
     hasSettings: !!(data && data.settings && typeof data.settings === 'object'),
     hasMappings: !!(data && data.mappings && typeof data.mappings === 'object'),
   };
@@ -183,6 +188,32 @@ function validateBackupMappings(mappings) {
   }
 }
 
+function validateYouTubeArchive(rows, followed) {
+  if (!Array.isArray(rows) || rows.length > MAX_PLAYLISTS) throw new Error('Invalid YouTube archive');
+  const ids = new Set();
+  for (const row of rows) {
+    if (!isPlainObject(row) || typeof row.id !== 'string' || !row.id || row.id.length > 100 ||
+        ids.has(row.id) || typeof row.name !== 'string' || row.name.length > 500) throw new Error('Invalid archived playlist');
+    ids.add(row.id);
+    if (!followed && (!Number.isSafeInteger(row.savedAt) || row.savedAt < 0)) throw new Error('Invalid archive date');
+    if (followed && (!/^[\w-]{10,80}$/.test(row.id) || typeof row.following !== 'boolean' ||
+        !Number.isSafeInteger(row.lastAttempt) || !Number.isSafeInteger(row.lastSuccess) ||
+        row.lastAttempt < 0 || row.lastSuccess < 0 || typeof row.error !== 'string')) throw new Error('Invalid followed playlist');
+    const lists = followed ? [row.tracks, row.known, row.added, row.removed] : [row.tracks];
+    for (const tracks of lists) {
+      if (!Array.isArray(tracks) || tracks.length > MAX_PLAYLIST_TRACKS || tracks.some(track =>
+        !isPlainObject(track) || typeof track.name !== 'string' || track.name.length > 500 ||
+        typeof track.artist !== 'string' || track.artist.length > 500 ||
+        ((followed || track.videoId) && (typeof track.videoId !== 'string' || !/^[\w-]{11}$/.test(track.videoId))))) {
+        throw new Error('Invalid archived tracks');
+      }
+    }
+    if (followed && row.known.some(track => !Number.isInteger(track.count) || track.count < 1 || track.count > 2000)) {
+      throw new Error('Invalid archived track count');
+    }
+  }
+}
+
 function validateBackupContainers(data, requireLikedSongs = false) {
   if (!Array.isArray(data.library)) throw new Error('Backup library must be an array');
   if (!Array.isArray(data.playlists)) throw new Error('Backup playlists must be an array');
@@ -193,6 +224,8 @@ function validateBackupContainers(data, requireLikedSongs = false) {
     if (!Array.isArray(data.likedSongs) || data.likedSongs.length > MAX_LIBRARY_TRACKS) throw new Error('Backup liked songs are invalid');
     if (sanitizeLikedSongs(data.likedSongs).length !== data.likedSongs.length) throw new Error('Backup liked songs contain invalid entries');
   }
+  if (data.youtubeArchive !== undefined) validateYouTubeArchive(data.youtubeArchive, false);
+  if (data.youtubeLinks !== undefined) validateYouTubeArchive(data.youtubeLinks, true);
   validateBackupLibrary(data.library);
   validateBackupPlaylists(data.playlists);
   validateBackupMappings(data.mappings);
@@ -216,6 +249,6 @@ function validateBackupData(parsed) {
 
 module.exports = {
   MAX_BACKUP_BYTES, MAX_BACKUP_VALUES, MAX_LIBRARY_TRACKS, MAX_PLAYLIST_TRACKS, SENSITIVE_SETTING_KEYS,
-  sanitizeSettingsForBackup, summarizeBackupData, validateBackupJsonShape, validateBackupLibrary,
+  sanitizeSettingsForBackup, summarizeBackupData, validateYouTubeArchive, validateBackupJsonShape, validateBackupLibrary,
   validateBackupPlaylistTrack, validateBackupPlaylists, validateBackupMappings, validateBackupContainers, validateBackupData,
 };

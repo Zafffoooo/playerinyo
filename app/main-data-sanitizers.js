@@ -73,7 +73,7 @@ function sanitizeRadioContext(value) {
   const playedTracks = value.playedTracks === undefined ? [] : value.playedTracks;
   if (!Array.isArray(playedTracks) || playedTracks.length > 100) backupSettingError('playbackSession.radioContext.playedTracks', 'must be an array of at most 100 tracks');
   const safePlayedTracks = playedTracks.map((track, index) => sanitizeTrackReference(track, `playbackSession.radioContext.playedTracks[${index}]`));
-  if (source.providerId === 'lastfm') {
+  if (source.providerId === 'lastfm' || source.providerId === 'listenbrainz') {
     if (providerSession.version !== 1) backupSettingError('playbackSession.radioContext.providerSession.version', 'must be version 1');
     const poolKey = boundedBackupString(providerSession.poolKey, 'playbackSession.radioContext.providerSession.poolKey', 240, false);
     if (providerSession.mode !== undefined && providerSession.mode !== 'balanced') backupSettingError('playbackSession.radioContext.providerSession.mode', 'must be balanced');
@@ -287,7 +287,7 @@ function sanitizeImportedSettings(settings) {
   const booleanKeys = [
     'minimizeToTray', 'useNativeTitleBar', 'discordRpc', 'discordShowProgress', 'discordShowPaused', 'normalization', 'notifications',
     'virtualScrolling', 'lazyLoading', 'glassEffects', 'npLyricsVisible', 'sortAscending',
-    'likedSongsSortAscending', 'isPlaylistGridView', 'automaticBackupsEnabled',
+    'likedSongsSortAscending', 'isPlaylistGridView', 'automaticBackupsEnabled', 'listenbrainzGenreRadioEnabled',
   ];
   for (const key of booleanKeys) {
     if (!Object.prototype.hasOwnProperty.call(settings, key)) continue;
@@ -368,6 +368,13 @@ function sanitizeImportedSettings(settings) {
       folderIds.add(id);
       return { id, name, collapsed: folder.collapsed === true };
     });
+  }
+  if (Object.hasOwn(settings, 'watchedLibraryRoots')) {
+    if (!Array.isArray(settings.watchedLibraryRoots) || settings.watchedLibraryRoots.length > 512) {
+      backupSettingError('watchedLibraryRoots', 'must be an array of at most 512 paths');
+    }
+    next.watchedLibraryRoots = [...new Set(settings.watchedLibraryRoots.map((root, index) =>
+      boundedBackupString(root, `watchedLibraryRoots[${index}]`, 4096, false)))];
   }
   if (Object.prototype.hasOwnProperty.call(settings, 'libraryRoots')) {
     if (!Array.isArray(settings.libraryRoots) || settings.libraryRoots.length > 512) backupSettingError('libraryRoots', 'must be an array of at most 512 paths');

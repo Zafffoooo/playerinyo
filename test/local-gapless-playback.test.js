@@ -24,12 +24,12 @@ function contextFor(nextTrack) {
   const frames = [];
   const context = vm.createContext({
     window: {}, audioEls, activeAudioIdx: 0, preparedLocalSlot: null, preparedRadioSlot: null,
-    localGaplessFrame: null, playbackTransitionPending: false, playbackSeekActive: false,
+    localGaplessTimer: null, playbackTransitionPending: false, playbackSeekActive: false,
     state: { currentPlayingTrack: { matchedFile: { filePath: '/music/first.opus' } }, loopMode: 0, isPlaying: true, crossfadingNext: false },
     appSettings: { crossfade: 0 }, HTMLMediaElement: { HAVE_FUTURE_DATA: 3 },
     toFileUrl: filePath => `file://${filePath}`,
-    requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
-    cancelAnimationFrame: () => {},
+    setTimeout: callback => { frames.push(callback); return frames.length; },
+    clearTimeout: () => {},
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'app', 'renderer-playback-downloads.js'), 'utf8'), context);
   const originalPlayNextTrack = context.playNextTrack;

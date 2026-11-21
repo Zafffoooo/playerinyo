@@ -819,31 +819,114 @@ async function saveCurrentQueueAsPlaylist() {
   }
 }
 
-function renderPlaylistFolderGroups(list) {
-  var folders=Array.isArray(appSettings.playlistFolders) ? appSettings.playlistFolders : [];
-  var create=document.createElement('button'); create.className='btn btn-outline'; create.textContent='New folder'; create.onclick=async function() { var name=await requestPlaylistText('Folder name',''); if(!name || !name.trim()) return; await commitPlaylistFolderChange(function() { appSettings.playlistFolders=folders.concat([{id:createQueueEntryId(),name:name.trim().slice(0,120),collapsed:false}]); }); }; var oldCreate=$('playlist-new-folder');if(oldCreate)oldCreate.remove();create.id='playlist-new-folder';document.querySelector('#regular-playlists-section .playlist-workspace-section-head').appendChild(create);
-  if(folders.length) { var ungrouped=document.createElement('h3');ungrouped.className='playlist-ungrouped-heading';ungrouped.textContent='No folder';list.prepend(ungrouped); }
-  folders.forEach(function(folder) {
-    var section=document.createElement('section'); section.className='playlist-folder';section.dataset.folderId=folder.id;
-    var header=document.createElement('div'); header.className='playlist-folder-header';
-    var toggle=document.createElement('button'); toggle.className='btn btn-outline'; toggle.textContent=folder.name; toggle.setAttribute('aria-expanded',String(!folder.collapsed));
-    var body=document.createElement('div'); body.className='playlists-container playlists-grid'; body.hidden=folder.collapsed;
-    toggle.onclick=function() { commitPlaylistFolderChange(function() { folder.collapsed=!folder.collapsed; }); };
-    var rename=document.createElement('button');rename.className='btn btn-outline';rename.textContent='Rename';rename.onclick=async function() { var name=await requestPlaylistText('Folder name',folder.name);if(name && name.trim()) { await commitPlaylistFolderChange(function() { folder.name=name.trim().slice(0,120); }); } };
-    var remove=document.createElement('button');remove.className='btn btn-outline';remove.textContent='Delete folder';remove.onclick=async function() { await commitPlaylistFolderChange(function() { appSettings.playlistFolders=folders.filter(function(f) { return f!==folder; }); state.playlists.forEach(function(p) { if(p.folderId===folder.id) delete p.folderId; }); },true); };
-    section.ondragover=function(e) { if(e.dataTransfer.types.includes('application/x-playerinyo-playlist')) e.preventDefault(); };
-    section.ondrop=async function(e) { var id=e.dataTransfer.getData('application/x-playerinyo-playlist');var pl=state.playlists.find(function(p) { return p.id===id; });if(pl) { e.preventDefault();e.stopPropagation();await commitPlaylistFolderChange(function() { pl.folderId=folder.id; },true); } };
-    header.append(toggle,rename,remove);section.append(header,body);list.appendChild(section);
-    state.playlists.filter(function(p) { return p.folderId===folder.id; }).forEach(function(p) { var card=$(p.id);if(card) body.appendChild(card); });
+function fillPlaylistFolderSelect(select, selected) {
+  select.replaceChildren(new Option('No folder', ''));
+  (appSettings.playlistFolders || []).forEach(function (folder) {
+    select.add(new Option(folder.name, folder.id));
   });
-  state.playlists.forEach(function(pl) { var card=$(pl.id);if(!card) return;card.draggable=true;card.addEventListener('dragstart',function(e) { e.dataTransfer.setData('application/x-playerinyo-playlist',pl.id); }); });
+  select.value = selected || '';
+  if (select.selectedIndex < 0) select.value = '';
 }
-function addPlaylistFolderMenu(pl,menu) {
-  var old=$('playlist-folder-move');if(old) old.remove();if(pl.isSpecial) return;
-  var select=document.createElement('select');select.id='playlist-folder-move';select.setAttribute('aria-label','Move to folder');
-  var none=document.createElement('option');none.value='';none.textContent='No folder';select.appendChild(none);
-  (appSettings.playlistFolders || []).forEach(function(f) { var option=document.createElement('option');option.value=f.id;option.textContent=f.name;select.appendChild(option); });select.value=pl.folderId || '';
-  select.onchange=async function() { var value=select.value;hideAllContextMenus();await commitPlaylistFolderChange(function() { pl.folderId=value; },true); };menu.appendChild(select);
+
+function renderPlaylistFolderFilter() {
+  var options = $('playlist-folder-options');
+  var folders = appSettings.playlistFolders || [];
+  var selected = folders.find(function (folder) { return folder.id === playlistWorkspaceFolder; });
+  if (!selected && playlistWorkspaceFolder !== '') playlistWorkspaceFolder = null;
+  $('playlist-folder-summary').textContent = selected ? selected.name : (playlistWorkspaceFolder === '' ? 'No folder' : 'All folders');
+  options.replaceChildren();
+  function button(label, action, pressed) {
+    var item = document.createElement('button');
+    item.className = 'btn btn-outline';
+    item.type = 'button';
+    item.textContent = label;
+    if (pressed !== undefined) item.setAttribute('aria-pressed', String(pressed));
+    item.onclick = action;
+    options.appendChild(item);
+    return item;
+  }
+  function filterOption(label, id) {
+    var target = button(label, function () {
+      playlistWorkspaceFolder = id;
+      closePlaylistWorkspacePicker(options.parentElement);
+      renderPlaylistFolderFilter();
+      filterPlaylists($('playlist-search').value);
+      $('playlist-folder-summary').focus();
+    }, playlistWorkspaceFolder === id);
+    if (id === null) return;
+    target.ondragover = function (event) {
+      if (!event.dataTransfer.types.includes('application/x-playerinyo-playlist')) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    };
+    target.ondrop = function (event) {
+      var playlistId = event.dataTransfer.getData('application/x-playerinyo-playlist');
+      var playlist = state.playlists.find(function (item) { return item.id === playlistId; });
+      if (!playlist) return;
+      event.preventDefault();
+      closePlaylistWorkspacePicker(options.parentElement);
+      setPlaylistFolder(playlist, id);
+    };
+  }
+  filterOption('All folders', null);
+  filterOption('No folder', '');
+  folders.forEach(function (folder) { filterOption(folder.name, folder.id); });
+  button('New folder…', async function () {
+    closePlaylistWorkspacePicker(options.parentElement);
+    var name = await requestPlaylistText('New folder', '');
+    if (!name) return;
+    await commitPlaylistFolderChange(function () {
+      appSettings.playlistFolders = (appSettings.playlistFolders || []).concat({ id: createQueueEntryId(), name: name, collapsed: false });
+    });
+  });
+  if (!selected) return;
+  button('Rename selected folder…', async function () {
+    closePlaylistWorkspacePicker(options.parentElement);
+    var name = await requestPlaylistText('Rename folder', selected.name);
+    if (!name) return;
+    await commitPlaylistFolderChange(function () {
+      selected.name = name;
+    });
+  });
+  button('Delete selected folder…', async function () {
+    closePlaylistWorkspacePicker(options.parentElement);
+    if (!await requestConfirmation('Delete “' + selected.name + '”? Playlists in this folder will move to No folder.')) return;
+    await commitPlaylistFolderChange(function () {
+      appSettings.playlistFolders = appSettings.playlistFolders.filter(function (folder) { return folder.id !== selected.id; });
+      state.playlists.forEach(function (playlist) { if (playlist.folderId === selected.id) delete playlist.folderId; });
+    }, true);
+  });
+}
+
+function setPlaylistFolder(playlist, folderId) {
+  return commitPlaylistFolderChange(function () {
+    if (folderId) playlist.folderId = folderId;
+    else delete playlist.folderId;
+  }, true);
+}
+
+function addPlaylistFolderMenu(pl, menu) {
+  menu.querySelectorAll('[data-folder-action]').forEach(function (action) { action.remove(); });
+  if (pl.isSpecial) return;
+  function add(label, handler) {
+    var action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'menu-item';
+    action.setAttribute('role', 'menuitem');
+    action.dataset.folderAction = '';
+    action.textContent = label;
+    action.onclick = function () { hideAllContextMenus(); handler(); };
+    menu.insertBefore(action, $('pctx-delete'));
+  }
+  add('Move to folder…', async function () {
+    if (!(appSettings.playlistFolders || []).length) {
+      showToast('Create a folder from the playlist folder filter first.');
+      return;
+    }
+    var folder = await requestPlaylistText('Move to folder', pl.folderId, { folder: true, action: 'Move' });
+    if (folder !== null && folder !== (pl.folderId || '')) await setPlaylistFolder(pl, folder);
+  });
+  if (pl.folderId) add('Remove from folder', function () { return setPlaylistFolder(pl, ''); });
 }
 var activeMissingPlaylistRequest = '';
 var missingPlaylistSearchView = '';
@@ -897,19 +980,32 @@ function requestPlaylistText(title, initial, options) {
     var box = document.createElement('div'); box.className = 'modal-content playlist-text-dialog';
     var heading = document.createElement('h2'); heading.textContent = title;
     var label = document.createElement('label'); label.textContent = 'Name';
-    var input = document.createElement('input'); input.value = initial; input.maxLength = 120; label.appendChild(input);
+    var input = document.createElement(options?.folder ? 'select' : 'input');
+    if (options?.folder) {
+      label.textContent = 'Folder';
+      fillPlaylistFolderSelect(input, initial);
+    } else {
+      input.value = initial;
+      input.maxLength = 120;
+    }
+    label.appendChild(input);
     var include = document.createElement('input'); include.type = 'checkbox';
     var includeLabel = document.createElement('label'); includeLabel.className = 'playlist-queue-include'; includeLabel.append(include, document.createTextNode('Include current track'));
     var cancel = document.createElement('button'); cancel.dataset.cancel = 'true'; cancel.className = 'btn btn-outline'; cancel.textContent = 'Cancel';
-    var save = document.createElement('button'); save.className = 'btn btn-primary'; save.textContent = 'Save';
+    var save = document.createElement('button'); save.className = 'btn btn-primary'; save.textContent = options?.action || 'Save';
     var actions = document.createElement('div'); actions.className = 'playlist-dialog-actions'; actions.append(cancel, save);
     function finish(value) { hideModal(modal); modal.remove(); resolve(value); }
     cancel.onclick = function () { finish(null); };
-    save.onclick = function () { if (input.value.trim()) finish(options ? { value: input.value.trim(), includeCurrent: include.checked } : input.value.trim()); };
+    save.onclick = function () {
+      if (options?.folder) finish(input.value);
+      else if (input.value.trim()) finish(options ? { value: input.value.trim(), includeCurrent: include.checked } : input.value.trim());
+    };
     input.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); save.click(); } };
-    box.append(heading, label); if (options && options.includeCurrent) box.appendChild(includeLabel); box.appendChild(actions);
+    box.append(heading, label);
+    if (options?.includeCurrent) box.appendChild(includeLabel);
+    box.appendChild(actions);
     modal.appendChild(box); document.body.appendChild(modal); showModal(modal);
-    requestAnimationFrame(function () { input.focus(); input.select(); });
+    requestAnimationFrame(function () { input.focus(); input.select?.(); });
   });
 }
 

@@ -69,6 +69,18 @@ function normalizeLastfmGenreKey(value) {
   return LASTFM_GENRE_ALIASES[normalized] || normalized;
 }
 
+const MUSICBRAINZ_TAG_OVERRIDES = {
+  'r-and-b': 'rhythm and blues', 'drum-and-bass': 'drum and bass', 'rock-and-roll': 'rock and roll',
+  'hip-hop': 'hip hop', 'trip-hop': 'trip hop', 'j-pop': 'j-pop', 'k-pop': 'k-pop',
+  'lo-fi': 'lo-fi', 'singer-songwriter': 'singer-songwriter', world: 'world music',
+};
+
+function musicBrainzTagForGenre(value) {
+  const id = normalizeLastfmGenreKey(value);
+  if (!LASTFM_GENRE_CATALOG.some(genre => genre.id === id)) return '';
+  return MUSICBRAINZ_TAG_OVERRIDES[id] || id.replace(/-/g, ' ');
+}
+
 function getLastfmGenreCatalog() {
   return LASTFM_GENRE_CATALOG.map((genre) => Object.assign({}, genre));
 }
@@ -222,7 +234,7 @@ function createLocalLibraryProvider() {
 // This adapter deliberately returns discovery candidates, not playable tracks.
 // It is registered only when a caller explicitly opts in; Phase 4A keeps the
 // Local Library as the sole UI-startable provider.
-function createLastfmProvider(client) {
+function createGenreDiscoveryProvider(client, id, label) {
   function normalizeSession(value, fallbackRequest) {
     var source = value && typeof value === 'object' ? value : {};
     if (source.version !== 1) return null;
@@ -241,13 +253,13 @@ function createLastfmProvider(client) {
     };
   }
   return {
-    id: 'lastfm',
-    label: 'Last.fm Discovery',
+    id,
+    label,
     capabilities: { genres: true, continuous: true, playbackKinds: [], producesCandidates: true },
     normalizeSession: normalizeSession,
     async listGenres() { return getLastfmGenreCatalog(); },
     async startStation(request, context) {
-      if (!client || !client.start) throw new Error('Last.fm discovery client is unavailable.');
+      if (!client || !client.start) throw new Error(label + ' is unavailable.');
       var result = await client.start({ genreIds: request && request.genreIds || [], mode: 'balanced', excludeKnownTracks: !!(request && request.excludeKnownTracks), discoveryDepth: request && request.discoveryDepth, stationId: request && request.stationId || '' }, context);
       return { ...result, providerSession: normalizeSession(result && result.providerSession, request) };
     },
@@ -262,16 +274,24 @@ function createLastfmProvider(client) {
   };
 }
 
+function createLastfmProvider(client) {
+  return createGenreDiscoveryProvider(client, 'lastfm', 'Last.fm Discovery');
+}
+
+function createListenbrainzProvider(client) {
+  return createGenreDiscoveryProvider(client, 'listenbrainz', 'ListenBrainz Genre Radio');
+}
+
 function createSongRadioProvider(client) {
   function encode(item) {
-    return JSON.stringify([String(item.artist || '').slice(0, 200), String(item.title || '').slice(0, 300), String(item.trackMbid || '').slice(0, 80), String(item.album || '').slice(0, 300), Math.max(0, Number(item.duration) || 0)]);
+    return JSON.stringify([String(item.artist || '').slice(0, 200), String(item.title || '').slice(0, 300), String(item.trackMbid || '').slice(0, 80), String(item.album || '').slice(0, 300), Math.max(0, Number(item.duration) || 0), item.providerId === 'listenbrainz' ? 'listenbrainz' : undefined]);
   }
   function decode(value) {
     try {
       var row = JSON.parse(value);
       if (!Array.isArray(row) || !row[0] || !row[1]) return null;
       var artist = String(row[0]), title = String(row[1]);
-      return { id: 'song-radio:' + artist.toLocaleLowerCase() + '::' + title.toLocaleLowerCase(), providerId: 'lastfm', itemKind: 'candidate', artist: artist, title: title, trackMbid: String(row[2] || ''), album: String(row[3] || ''), duration: Number(row[4]) || 0 };
+      return { id: 'song-radio:' + artist.toLocaleLowerCase() + '::' + title.toLocaleLowerCase(), providerId: row[5] === 'listenbrainz' ? 'listenbrainz' : 'lastfm', itemKind: 'candidate', artist: artist, title: title, trackMbid: String(row[2] || ''), album: String(row[3] || ''), duration: Number(row[4]) || 0 };
     } catch (_) { return null; }
   }
   function takeBatch(session) {
@@ -312,6 +332,8 @@ var radioProviderApi = {
   RECENT_ITEM_LIMIT,
   createLocalLibraryProvider,
   createLastfmProvider,
+  createListenbrainzProvider,
+  musicBrainzTagForGenre,
   createSongRadioProvider,
   createRadioProviderRegistry,
   getGenreLabels,

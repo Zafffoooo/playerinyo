@@ -33,6 +33,8 @@ async function buildBackup({ paths, settings, fallbackLikedSongs, kind, appName 
     mappings: await readJsonFileStrict(paths.mappings, {}),
     settings,
     likedSongs: await readJsonFileStrict(paths.likedSongs, fallbackLikedSongs),
+    ...(paths.youtubeArchive && { youtubeArchive: await readJsonFileStrict(paths.youtubeArchive, []) }),
+    ...(paths.youtubeLinks && { youtubeLinks: await readJsonFileStrict(paths.youtubeLinks, []) }),
     exportedFrom: appName,
   };
   const payload = { app: appName, schemaVersion: 1, kind, exportedAt: new Date().toISOString(), data };
@@ -42,7 +44,7 @@ async function buildBackup({ paths, settings, fallbackLikedSongs, kind, appName 
   builtBackup = { kind, text };
   return {
     summary: summarizeBackupData(data),
-    hasExistingData: !!(data.library.length || data.playlists.length || Object.keys(data.mappings).length || data.likedSongs.length || Object.keys(storedSettings).length || Object.keys(storedListeningStats).length),
+    hasExistingData: !!(data.library.length || data.playlists.length || Object.keys(data.mappings).length || data.likedSongs.length || data.youtubeArchive?.length || data.youtubeLinks?.length || Object.keys(storedSettings).length || Object.keys(storedListeningStats).length),
   };
 }
 

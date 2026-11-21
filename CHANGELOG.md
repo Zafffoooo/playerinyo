@@ -2,6 +2,40 @@
 
 All notable changes to Playerinyo are recorded in this file.
 
+## 0.1.9 — 2026-11-21
+
+### Türkçe
+
+- **ListenBrainz:** Hesabını Bağlantılar ekranından bağla, tüm dinleme geçmişini içe aktar ve yeni dinlemeleri gönder. Gönderilemeyen dinlemeler kuyrukta kalır ve yeniden denenebilir.
+- **Keşif:** ListenBrainz geçmişinden kişisel öneriler ve yeni albümler, türe göre radyo ve benzer parçalardan radyo eklendi. ListenBrainz listelerini önizleyebilir, yerelde eşleşen parçaları çalabilir veya listeyi içe aktarabilirsin.
+- **YouTube Music:** Herkese açık veya liste dışı çalma listelerini bağlantıyla içe aktar. Takip ettiğin listeler Playerinyo açıkken dört saatte bir kontrol edilir. Eklenen ve kaldırılan parçalar arşivde görünür. Takeout ZIP, CSV ve yapıştırılan CSV de yerel arşive eklenebilir.
+- **Çalma listeleri:** Kaynağa göre filtreleme, liste arama, son kullanılan listelere hızlı erişim ve sürükleyerek klasöre taşıma eklendi. Yeni liste oluştururken klasör seçilebilir.
+- **Oynatma ve arayüz:** Karışık çalma açıkken elle seçilen parça sıranın başına alınır. Gapless zamanlaması, indirme göstergesi ve Bağlantılar ekranı iyileştirildi.
+- **Metadata ve keşif kaynakları:** İndirilen parçaların etiket eşleştirmesi MusicBrainz ve ListenBrainz verileriyle iyileştirildi. Benzer sanatçı ve öneri sorgularına Deezer desteği eklendi.
+
+[PR #1](https://github.com/Zafffoooo/playerinyo/pull/1) — Oztturk katkısı:
+
+- Büyük kütüphanelerde beğeni, playlist ve içe aktarma eşleştirmeleri önbelleğe alındı; indirme ve aktarım ekranlarında gereksiz liste yenilemeleri azaltıldı.
+- Bilinen şarkı indeksinin disk yazmaları birleştirildi; değişmemiş dosyaların eksik metadatasının her açılışta yeniden okunması önlendi.
+- MP3 etiket yazma ve yedek oluşturma/doğrulama işleri ana süreçten worker'a taşındı. Yedekleme ve çok dosyalı veri işlemleri ortak yazma kilidi kullanıyor.
+- Taşınmış dosyaların eşleştirilmesi ve Spotify ZIP aktarımının işlenmesi iyileştirildi; ZIP içindeki ilgili JSON dosyalarının toplam açılmış boyutu 160 MB ile sınırlandı.
+
+### English
+
+- **ListenBrainz:** Connect in Settings, import your full listening history, and submit new listens. Failed submissions stay queued for retry.
+- **Discovery:** Added personal recommendations, fresh releases, genre radio, and similar-track radio with ListenBrainz. Preview ListenBrainz playlists, play locally matched tracks, or review an import.
+- **YouTube Music:** Import public or unlisted playlist links. While the app is open, followed links are checked every four hours and additions and removals appear in the archive. The local archive also accepts Takeout ZIP files, CSV files, and pasted CSV.
+- **Playlists:** Search and filter by source, open recently used playlists from the sidebar, drag playlists into folders, and select a folder when creating a playlist.
+- **Playback and interface:** Manually selected tracks start the shuffled queue. Improved gapless timing, download progress feedback, and the Connections screen.
+- **Metadata and discovery sources:** Improved downloaded track metadata matching with MusicBrainz and ListenBrainz. Added Deezer as a source for similar artists and recommendations.
+
+[PR #1](https://github.com/Zafffoooo/playerinyo/pull/1) — contributed by Oztturk:
+
+- Cached liked-track, playlist, and import matching for large libraries; reduced unnecessary list rebuilding in download and import views.
+- Coalesced known-track index writes and avoided repeatedly reparsing unchanged files with legitimately missing metadata on startup.
+- Moved MP3 tag writing and backup creation/validation to workers. Backup snapshots and multi-file data transactions now share a source-write lock.
+- Improved moved-file matching and Spotify ZIP processing; matching JSON entries are limited to 160 MB of combined expanded data.
+
 ## 0.1.8 — 2026-10-30
 
 ### Türkçe

@@ -253,7 +253,9 @@ async function runBackupImport() {
     var res = await window.api.importBackup();
     if (!res || !res.ok) { if (res && !res.canceled) notifyUser('Backup import failed: ' + (res.error || 'unknown error')); return; }
     var s = res.summary || {};
-    var counts = ['Library tracks: ' + (s.library || 0), 'Playlists: ' + (s.playlists || 0), 'Liked songs: ' + (s.likedSongs || 0)].join('\n');
+    var counts = ['Library tracks: ' + (s.library || 0), 'Playlists: ' + (s.playlists || 0), 'Liked songs: ' + (s.likedSongs || 0),
+      s.youtubeArchive === undefined ? 'Existing YouTube archive will be kept.' : 'YouTube archive versions: ' + s.youtubeArchive,
+      s.youtubeLinks === undefined ? 'Existing followed links will be kept.' : 'Followed YouTube archives: ' + s.youtubeLinks].join('\n');
     if (!await requestConfirmation('Import backup from:\n' + res.filePath + '\n\n' + counts + '\n\nThis will replace current app library/playlists/settings. Continue?')) return;
     if (hasActiveDownloadQueueJobs()) { notifyUser('A download started while the backup was being reviewed. Wait for it to finish and try again.'); return; }
     beginAppStateCommit();
@@ -277,6 +279,7 @@ async function runBackupImport() {
       return;
     }
     restoreCommitted = true;
+    if (snapshot) snapshot.youtubeBackup = restored.previousYouTube;
     resetPlaybackRuntime({ clearCurrent: true, clearQueues: true, clearHistory: true, preserveSettings: true });
     await reloadRendererAppState(restored.likedSongs);
     state.navHistory = [];
@@ -892,9 +895,13 @@ var btnLfmCancel = null;
 var lastfmApiLink = null;
 
 
-function updateLastfmIcon() {
-  var icon = $('lastfm-icon'); if (!icon) return;
-  icon.style.color = appSettings.lastfmConnected ? 'var(--text-base)' : 'var(--text-subdued)';
+function updateConnectionsIcon() {
+  var icon = $('connections-icon');
+  if (!icon) return;
+  var connected = appSettings.listenbrainzConnected || appSettings.lastfmConnected;
+  icon.classList.toggle('ph-plugs', !connected);
+  icon.classList.toggle('ph-plugs-connected', !!connected);
+  refreshScrobblingSettings();
 }
 
 // Add these with other context menu listeners
@@ -1081,6 +1088,106 @@ async function addTracksToPlaylist(pl, tracksToAdd) {
   return addedCount;
 }
 var activeSettingsPage = 'library';
+var watchedLibraryStatus = new Map();
+
+function renderWatchedLibraryStatus() {
+  var watched = (appSettings.watchedLibraryRoots || []).filter(root => (appSettings.libraryRoots || []).includes(root));
+  var messages = watched.map(root => watchedLibraryStatus.get(root)).filter(Boolean);
+  $('library-watch-status').textContent = messages.length ? messages.join(' ') :
+    (watched.length ? 'Checking for changes every minute.' : '');
+}
+
+async function refreshWatchedLibraryFolders() {
+  if (!appInitializationComplete || rendererPersistenceSuspended) return;
+  var roots = (appSettings.watchedLibraryRoots || []).filter(root => (appSettings.libraryRoots || []).includes(root));
+  if (!roots.length) return;
+  var generation = beginLibraryScan();
+  if (!generation) return;
+  try {
+    var revision = libraryRevision;
+    var paths = new Set(state.musicFiles.map(file => file.filePath));
+    var changed = [];
+    var availabilityChanged = false;
+    for (const root of roots) {
+      if (!libraryScanIsCurrent(generation)) return;
+      var current = getLibraryEntriesForScanRoot(root);
+      try {
+        var { files: scanned, partial } = await window.api.scanFolder(root, current, true);
+        if (!libraryScanIsCurrent(generation)) return;
+        if (!(appSettings.watchedLibraryRoots || []).includes(root)) continue;
+        if (partial) {
+          watchedLibraryStatus.set(root, 'Could not fully check ' + root + '. Existing tracks kept.');
+        } else {
+          var present = new Set(scanned.map(file => file.filePath));
+          var missing = 0;
+          current.forEach(file => {
+            var absent = !present.has(file.filePath);
+            if (absent !== libraryMissingFilePaths.has(file.filePath)) availabilityChanged = true;
+            if (!absent) libraryMissingFilePaths.delete(file.filePath);
+            else { libraryMissingFilePaths.add(file.filePath); missing++; }
+          });
+          watchedLibraryStatus.set(root, missing ? root + ' · ' + missing + ' missing. Use Review Moved Files to inspect.' : '');
+        }
+        var previous = new Map(current.map(file => [file.filePath, file]));
+        changed.push(...scanned.filter(file => {
+          var old = previous.get(file.filePath);
+          return !old || old.modifiedAtMs !== file.modifiedAtMs || old.fileSize !== file.fileSize;
+        }));
+      } catch (error) {
+        watchedLibraryStatus.set(root, 'Could not check ' + root + '. Existing tracks kept.');
+        console.warn(error);
+      }
+    }
+    if (!libraryScanIsCurrent(generation)) return;
+    if (changed.length) {
+      var missingPaths = libraryMissingFilePaths;
+      setMusicFiles(mergeScannedFiles(changed, { revision, paths }));
+      libraryMissingFilePaths = missingPaths;
+      await persistLibrary(state.musicFiles);
+    } else if (availabilityChanged) {
+      markLibraryDirty();
+    }
+    if (!libraryScanIsCurrent(generation)) return;
+    if (changed.length || availabilityChanged) {
+      if (state.currentView === 'metadata_health') renderMetadataHealthView();
+      else if (state.currentView === 'library') renderLibrary();
+    }
+    renderWatchedLibraryStatus();
+  } catch (error) {
+    console.warn('Could not update watched library folders:', error);
+  } finally {
+    finishLibraryScan();
+  }
+}
+
+function renderWatchedLibraryFolders() {
+  var list = $('library-watch-roots');
+  var roots = appSettings.libraryRoots || [];
+  list.replaceChildren();
+  if (!roots.length) list.textContent = 'Import a folder to watch it.';
+  roots.forEach(root => {
+    var label = document.createElement('label');
+    label.className = 'connection-option library-watch-root';
+    var checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = (appSettings.watchedLibraryRoots || []).includes(root);
+    checkbox.addEventListener('change', async () => {
+      var watched = new Set(appSettings.watchedLibraryRoots || []);
+      if (checkbox.checked) watched.add(root); else watched.delete(root);
+      appSettings.watchedLibraryRoots = [...watched];
+      await persistSettings(appSettings);
+      if (checkbox.checked) refreshWatchedLibraryFolders();
+      else {
+        watchedLibraryStatus.delete(root);
+        renderWatchedLibraryStatus();
+      }
+    });
+    label.append(checkbox, document.createTextNode(root));
+    list.append(label);
+  });
+  renderWatchedLibraryStatus();
+}
+
 function showSettingsPage(page) {
   var buttons = document.querySelectorAll('.settings-nav-item');
   var sections = document.querySelectorAll('#settings-sections > .settings-section[data-settings-page]');
@@ -1095,16 +1202,16 @@ function showSettingsPage(page) {
   });
   sections.forEach(function (section) {
     section.hidden = section.dataset.settingsPage !== page;
-    if (!section.hidden && !Array.from(sections).some(function (other) { return other !== section && other.dataset.settingsPage === page && other.open; })) section.open = true;
   });
   var list = $('settings-sections');
   if (list) list.scrollTop = 0;
-  if (page === 'discord') refreshDiscordHealth();
+  if (page === 'library') renderWatchedLibraryFolders();
+  if (page === 'connections') { refreshScrobblingSettings(); refreshDiscordHealth(); }
 }
 
 async function refreshDiscordHealth() {
   var modal = $('settings-modal');
-  if (!modal || !modal.classList.contains('active') || activeSettingsPage !== 'discord' || !window.api.discordStatus) return;
+  if (!modal || !modal.classList.contains('active') || activeSettingsPage !== 'connections' || !window.api.discordStatus) return;
   var result;
   try { result = await window.api.discordStatus(); }
   catch (error) { result = { enabled: false, error: String(error && error.message || error) }; }
@@ -1339,6 +1446,7 @@ function initSettingsControls() {
   });
   btnExportBackup = $('btn-export-backup');
   if (btnExportBackup) btnExportBackup.addEventListener('click', async function () {
+    if (!await requestConfirmation('Export a backup? It may include unlisted YouTube playlist links and archived tracks.')) return;
     btnExportBackup.disabled = true;
     var old = btnExportBackup.innerHTML;
     btnExportBackup.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Exporting...';
@@ -1628,21 +1736,30 @@ function initSettingsControls() {
     });
     function _npUpdateProg(e, a) { var r = _npPc.getBoundingClientRect(); a.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * a.duration; }
   }
+  $('btn-connections').addEventListener('click', function () {
+    openSettingsModal();
+    showSettingsPage('connections');
+  });
   btnLfmLogin = $('btn-lastfm-login');
   if (btnLfmLogin) {
     btnLfmLogin.addEventListener('click', async function () {
+      if (appSettings.lastfmProEnabled !== true) return;
       if (appSettings.lastfmConnected) {
         if (await requestConfirmation('You are connected as ' + appSettings.lastfmUsername + '. Disconnect?')) {
+          if (!await window.api.lastfmDisconnect()) {
+            showToast('Could not disconnect Last.fm.');
+            return;
+          }
           appSettings.lastfmUsername = null;
           appSettings.lastfmConnected = false;
-          persistInBackground(window.api.lastfmDisconnect());
           if (state.currentView === 'home') renderHomeDashboard();
-          updateLastfmIcon();
+          updateConnectionsIcon();
         }
       } else {
         var inpKey = $('lastfm-api-key'); if (inpKey) inpKey.value = '';
         var inpSec = $('lastfm-shared-secret'); if (inpSec) inpSec.value = '';
-        showModal($('lastfm-modal'));
+        $('lastfm-credentials').hidden = false;
+        inpKey?.focus();
       }
     });
   }
@@ -1657,15 +1774,14 @@ function initSettingsControls() {
       if (!ak || !ss) { notifyUser('Enter your Last.fm API key and shared secret first.'); return; }
       btnLfmBrowser.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Please wait...';
       var res = await window.api.lastfmGetAuthUrl({ apiKey: ak, sharedSecret: ss });
-      btnLfmBrowser.innerHTML = '1. Open Browser to Authorize';
+      btnLfmBrowser.textContent = '1. Authorize in browser';
       if (res && res.ok === true) {
         // Credentials have crossed the IPC boundary; do not retain them in the
         // renderer DOM while the user authorizes in the browser.
         if (keyInput) keyInput.value = '';
         if (secretInput) secretInput.value = '';
         lastfmToken = true;
-        btnLfmConfirm.disabled = false; btnLfmConfirm.classList.remove('btn-outline'); btnLfmConfirm.classList.add('btn-primary');
-        btnLfmConfirm.style.background = 'var(--accent)'; btnLfmConfirm.style.color = 'black';
+        btnLfmConfirm.disabled = false;
       } else {
         notifyUser(res && res.error === 'secure-storage-unavailable'
           ? 'Last.fm credentials cannot be saved because secure OS storage is unavailable. Enable a Linux Secret Service/keyring, then restart Playerinyo. Credentials are not stored in plaintext.'
@@ -1678,23 +1794,24 @@ function initSettingsControls() {
       if (!lastfmToken) return;
       btnLfmConfirm.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Verifying...';
       var res = await window.api.lastfmGetSession();
-      btnLfmConfirm.innerHTML = '2. I have authorized';
+      btnLfmConfirm.textContent = '2. Confirm authorization';
       if (res && res.name) {
         appSettings.lastfmUsername = res.name;
         appSettings.lastfmConnected = true;
         lastfmToken = null;
+        btnLfmConfirm.disabled = true;
         var keyInput = $('lastfm-api-key'); if (keyInput) keyInput.value = '';
         var secretInput = $('lastfm-shared-secret'); if (secretInput) secretInput.value = '';
-        hideModal($('lastfm-modal'));
+        $('lastfm-credentials').hidden = true;
         if (state.currentView === 'home') renderHomeDashboard();
-        updateLastfmIcon();
+        updateConnectionsIcon();
       } else {
         notifyUser('Failed to verify authorization. Did you click "Allow Access" in the browser?');
       }
     });
   }
   btnLfmCancel = $('btn-lastfm-cancel');
-  if (btnLfmCancel) btnLfmCancel.addEventListener('click', function () { lastfmToken = null; var keyInput = $('lastfm-api-key'); if (keyInput) keyInput.value = ''; var secretInput = $('lastfm-shared-secret'); if (secretInput) secretInput.value = ''; hideModal($('lastfm-modal')); });
+  if (btnLfmCancel) btnLfmCancel.addEventListener('click', function () { lastfmToken = null; btnLfmConfirm.disabled = true; var keyInput = $('lastfm-api-key'); if (keyInput) keyInput.value = ''; var secretInput = $('lastfm-shared-secret'); if (secretInput) secretInput.value = ''; $('lastfm-credentials').hidden = true; });
   lastfmApiLink = $('lastfm-api-link');
   if (lastfmApiLink) lastfmApiLink.addEventListener('click', function () { window.api.openExternal('https://www.last.fm/api/account/create'); });
   actxPlayNext = $('actx-play-next');

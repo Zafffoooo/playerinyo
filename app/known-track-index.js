@@ -5,6 +5,7 @@ const { getArtistTitleKey, normalizeMbid } = require('./lastfm-discovery');
 const VERSION = 1;
 const SOURCE_LOCAL = 1;
 const SOURCE_LASTFM = 2;
+const SOURCE_LISTENBRAINZ = 4;
 const MAX_TRACKS = 250000;
 const MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
 
@@ -39,11 +40,18 @@ function createKnownTrackIndex(value) {
       };
     }
   }
+  const listenbrainzSync = value?.version === VERSION ? value.listenbrainzSync : null;
+  if (typeof listenbrainzSync?.username === 'string' && listenbrainzSync.username) {
+    index.listenbrainzSync = { username: listenbrainzSync.username.slice(0, 500) };
+    for (const key of ['watermark', 'from', 'cursor', 'startedAt', 'exportId']) {
+      index.listenbrainzSync[key] = Number.isSafeInteger(listenbrainzSync[key]) ? Math.max(0, listenbrainzSync[key]) : 0;
+    }
+  }
   Object.defineProperty(index, '_counts', { value: { tracksByMbid: Object.keys(index.tracksByMbid).length, tracksByName: Object.keys(index.tracksByName).length }, writable: true, enumerable: false });
   return index;
 }
 
-function sourceMask(source) { return source === 'lastfm' ? SOURCE_LASTFM : SOURCE_LOCAL; }
+function sourceMask(source) { return source === 'listenbrainz' ? SOURCE_LISTENBRAINZ : source === 'lastfm' ? SOURCE_LASTFM : SOURCE_LOCAL; }
 
 function upsert(map, key, timestamp, source, index, field) {
   if (!key || (!map[key] && index._counts[field] >= MAX_TRACKS)) return false;
@@ -89,7 +97,7 @@ function beginLastfmSync(index, username, nowUts, overlapSeconds) {
     ['tracksByMbid', 'tracksByName'].forEach((field) => {
       Object.keys(index[field]).forEach((key) => {
         const row = index[field][key];
-        const retained = row[1] & SOURCE_LOCAL;
+        const retained = row[1] & ~SOURCE_LASTFM;
         if (retained) index[field][key] = [row[0], retained];
         else { delete index[field][key]; index._counts[field]--; }
       });
@@ -160,10 +168,69 @@ function ingestLastfmRecentPage(index, response, username, nowUts) {
   return { nextPage: index.lastfmSync.resumePage, complete: page >= totalPages, lastSeenUts: maxUts };
 }
 
+function selectListenbrainzAccount(index, username) {
+  if (index.listenbrainzSync?.username === username) return index.listenbrainzSync;
+  for (const field of ['tracksByMbid', 'tracksByName']) {
+    for (const [key, row] of Object.entries(index[field])) {
+      const retained = row[1] & ~SOURCE_LISTENBRAINZ;
+      if (retained) index[field][key] = [row[0], retained];
+      else {
+        delete index[field][key];
+        index._counts[field]--;
+      }
+    }
+  }
+  index.listenbrainzSync = { username, watermark: 0, from: 0, cursor: 0, startedAt: 0, exportId: 0 };
+  return index.listenbrainzSync;
+}
+
+function indexListenbrainzListen(index, listen) {
+  const metadata = listen?.track_metadata;
+  if (!Number.isSafeInteger(listen?.listened_at) || listen.listened_at <= 0 ||
+      typeof metadata?.artist_name !== 'string' || typeof metadata.track_name !== 'string') return false;
+  return indexTrack(index, {
+    artist: metadata.artist_name.slice(0, 500),
+    title: metadata.track_name.slice(0, 500),
+    mbid: metadata.mbid_mapping?.recording_mbid || metadata.additional_info?.recording_mbid,
+  }, 'listenbrainz', listen.listened_at);
+}
+
+function beginListenbrainzWindow(sync, now) {
+  if (sync.cursor) return;
+  sync.startedAt = now;
+  sync.cursor = now + 1;
+  sync.from = Math.max(0, sync.watermark ? sync.watermark - 300 : now - 14 * 86400);
+}
+
+function ingestListenbrainzPage(index, listens, count) {
+  const sync = index.listenbrainzSync;
+  if (!Array.isArray(listens) || listens.length > count ||
+      listens.some((row, position) => !Number.isSafeInteger(row?.listened_at) || row.listened_at <= 0 ||
+        row.listened_at >= sync.cursor || (position && row.listened_at > listens[position - 1].listened_at))) {
+    throw new Error('Invalid ListenBrainz history page.');
+  }
+  const oldest = listens.at(-1)?.listened_at || 0;
+  if (listens.length === count && oldest >= sync.from && oldest + 1 >= sync.cursor) {
+    throw new Error('Too many ListenBrainz listens share the same timestamp. Use full history import.');
+  }
+  for (const row of listens) {
+    if (row.listened_at >= sync.from) indexListenbrainzListen(index, row);
+  }
+  if (listens.length < count || oldest < sync.from) {
+    sync.watermark = sync.startedAt;
+    sync.from = sync.cursor = sync.startedAt = 0;
+    return true;
+  }
+  // Re-read the boundary second before advancing. Index upserts deduplicate it.
+  sync.cursor = oldest + 1;
+  return false;
+}
+
 function serializeKnownTrackIndex(index, maxBytes) {
   const limit = Math.max(1024, Number(maxBytes) || MAX_SERIALIZED_BYTES);
   const value = createKnownTrackIndex(index);
   const output = { version: VERSION, normalizationVersion: 1, tracksByMbid: {}, tracksByName: {}, lastfmSync: value.lastfmSync };
+  if (value.listenbrainzSync) output.listenbrainzSync = value.listenbrainzSync;
   // Preserve newest rows first and stop before a bounded on-disk index can
   // grow without limit. The final byte check is exact, not an estimate.
   let usedBytes = Buffer.byteLength(JSON.stringify(output), 'utf8');
@@ -189,6 +256,10 @@ module.exports = {
   VERSION,
   SOURCE_LOCAL,
   SOURCE_LASTFM,
+  selectListenbrainzAccount,
+  indexListenbrainzListen,
+  beginListenbrainzWindow,
+  ingestListenbrainzPage,
   MAX_TRACKS,
   createKnownTrackIndex,
   indexTrack,

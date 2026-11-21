@@ -273,3 +273,29 @@ test('worker rejects oversized MP3 before its synchronous tag parser runs', asyn
   await fs.promises.truncate(filePath, 512 * 1024 * 1024 + 1);
   await assert.rejects(runMainWorkerTask('updateMp3', { filePath, tags: { title: 'Too large' } }), /512 MB metadata editing limit/);
 });
+
+test('backup worker preserves YouTube archive and followed playlist snapshots', async t => {
+  const root = await fixture(t);
+  const args = backupArgs(root);
+  const track = { name: 'Song', artist: 'Artist', videoId: 'AAAAAAAAAAA' };
+  const youtubeArchive = [{ id: 'csv-entry', name: 'Imported CSV', tracks: [track], savedAt: 10 }];
+  const youtubeLinks = [{ id: 'PL_fixture_123', name: 'Followed', following: true, lastSuccess: 10,
+    lastAttempt: 20, error: 'Offline', tracks: [], known: [{ ...track, count: 1 }], added: [], removed: [track] }];
+  for (const [key, data] of Object.entries({ youtubeArchive, youtubeLinks })) {
+    args.paths[key] = path.join(root, key + '.json');
+    await fs.promises.writeFile(args.paths[key], JSON.stringify(data));
+  }
+  const worker = createMainWorkerClient();
+  t.after(() => worker.close());
+  const built = await worker.request('buildBackup', args);
+  assert.equal(built.summary.youtubeArchive, 1);
+  assert.equal(built.summary.youtubeLinks, 1);
+  assert.equal(built.hasExistingData, true);
+  const filePath = path.join(root, 'archive-backup.json');
+  await worker.request('writeBackup', { filePath });
+  await worker.request('inspectBackup', { filePath });
+  const data = validateBackupData(JSON.parse(await fs.promises.readFile(filePath, 'utf8')));
+  assert.deepEqual(data.youtubeArchive, youtubeArchive);
+  assert.deepEqual(data.youtubeLinks, youtubeLinks);
+  assert.throws(() => validateBackupData({ ...data, youtubeLinks: [{ ...youtubeLinks[0], id: '../../invalid' }] }), /followed playlist/);
+});

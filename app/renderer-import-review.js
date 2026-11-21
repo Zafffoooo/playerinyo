@@ -78,6 +78,30 @@ function syncYouTubeMusicResultsPlaybackState() {
   });
 }
 
+function appendArchiveImport(playlist, tracks) {
+  var identity = row => {
+    var record = row.csvRecord || row;
+    var id = record.VideoId || row.playback?.videoId;
+    return id ? 'video:' + id : playlistImportIdentity(record);
+  };
+  var counts = new Map();
+  playlist.tracks ||= [];
+  playlist.tracks.forEach(row => {
+    var key = identity(row);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  var appended = tracks.filter(row => {
+    var key = identity(row);
+    var remaining = counts.get(key) || 0;
+    if (remaining) counts.set(key, remaining - 1);
+    return !remaining;
+  });
+  var now = Date.now();
+  appended.forEach(row => playlist.tracks.push(stampPlaylistTrackAddedAt(row, now)));
+  if (appended.length) playlist.lastAddedAt = new Date(now).toISOString();
+  return { firstPlaylistId: playlist.id, playlistIds: [playlist.id], rows: appended };
+}
+
 function playlistImportIdentity(row) {
   var uri = String(row && (row.TrackUri || row.SourceUrl) || '').trim();
   if (uri) return 'uri:' + uri;
@@ -107,6 +131,17 @@ async function showPlaylistImportReview(importResult, reimportTarget) {
   }
   if (!groups.length) return;
   if (importResult && importResult.coverUrl && groups.length === 1) groups[0].cover = importResult.coverUrl;
+  var followYouTube = $('playlist-import-follow-youtube');
+  var unavailableCount = importResult.unavailableCount || 0;
+  var unavailableMessage = unavailableCount ? unavailableCount + (unavailableCount === 1 ?
+    ' unavailable track was omitted from this import.' : ' unavailable tracks were omitted from this import.') : '';
+  followYouTube.dataset.playlistId = importResult.youtubePlaylistId || '';
+  followYouTube.dataset.message = unavailableMessage;
+  followYouTube.hidden = !importResult.canFollowYouTube || !!reimportTarget;
+  followYouTube.disabled = false;
+  $('playlist-import-youtube').hidden = followYouTube.hidden && !unavailableCount;
+  $('playlist-import-youtube-status').textContent = unavailableMessage ||
+    (followYouTube.hidden ? '' : 'Keep an archive of changes to this playlist.');
   var coverPreview = $('playlist-import-cover-preview');
   if (coverPreview) {
     var coverUrl = groups.length === 1 && typeof groups[0].cover === 'string' && /^https:\/\//i.test(groups[0].cover) ? groups[0].cover : '';
@@ -116,7 +151,7 @@ async function showPlaylistImportReview(importResult, reimportTarget) {
   }
   groups.forEach(function (group) { group.tracks.forEach(function (row) {
     if (isM3uImportRecord(row)) row.__addLocalSelected = false;
-    else row.__downloadSelected = !reimportTarget || row.__importDiff === 'new';
+    else row.__downloadSelected = !['listenbrainz', 'youtube-archive'].includes(importResult.format) && (!reimportTarget || row.__importDiff === 'new');
   }); });
   cancelPlaylistCandidateSearch(false);
   pendingPlaylistImport = { sourcePath: sourcePath, sourceFormat: importResult.format || '', groups: groups, conflictMode: 'create', reimportTarget: reimportTarget || null, diff: reimportTarget ? diff : null };
@@ -141,7 +176,20 @@ async function showPlaylistImportReview(importResult, reimportTarget) {
   if (getPlaylistImportRows().some(function (item) { return isPlaylistImportDownloadEligible(item.row); }) && !appSettings.ytdlDownloadFolder && window.api.getDefaultDownloadFolder) appSettings.ytdlDownloadFolder = await window.api.getDefaultDownloadFolder();
   var titleEl = $('playlist-import-title'); if (titleEl) titleEl.textContent = reimportTarget ? 'Reimport Playlist' : 'Import Playlist';
   var importOnlyBtn = $('playlist-import-only'); if (importOnlyBtn) importOnlyBtn.textContent = reimportTarget ? 'Add new tracks' : 'Import Only';
-  var options = $('playlist-import-options'); if (options) options.hidden = !!reimportTarget;
+  var options = $('playlist-import-options'); if (options) options.hidden = !!reimportTarget || importResult.format === 'youtube-archive';
+  var archiveImport = importResult.format === 'youtube-archive';
+  $('playlist-import-archive-target').hidden = !archiveImport;
+  var target = $('playlist-import-archive-playlist');
+  target.replaceChildren(new Option('Create new playlist', ''));
+  if (archiveImport) {
+    var destinations = state.playlists.filter(pl => !pl.isSpecial);
+    var nameCounts = new Map();
+    destinations.forEach(pl => nameCounts.set(pl.name, (nameCounts.get(pl.name) || 0) + 1));
+    destinations.forEach((pl, index) => {
+      var name = nameCounts.get(pl.name) > 1 ? pl.name + ' (' + (index + 1) + ')' : pl.name;
+      target.add(new Option(name + ' · ' + (pl.tracks?.length || 0) + ' tracks', pl.id));
+    });
+  }
   var conflict = $('playlist-import-conflict'); if (conflict) conflict.value = 'create';
   var status = $('playlist-import-status'); if (status) status.textContent = '';
   var toolStatus = $('playlist-import-tool-status'); if (toolStatus) toolStatus.textContent = '';
@@ -149,7 +197,7 @@ async function showPlaylistImportReview(importResult, reimportTarget) {
   renderPlaylistImportReview();
   showModal($('playlist-import-modal'));
   var missingRows = getMissingImportRows(false);
-  if (!reimportTarget && importResult.format !== 'url' && missingRows.length > 0 && missingRows.length <= 5) {
+  if (!reimportTarget && importResult.format !== 'url' && !['listenbrainz', 'youtube-archive'].includes(importResult.format) && missingRows.length > 0 && missingRows.length <= 5) {
     setTimeout(function () { if (pendingPlaylistImport && pendingPlaylistImport.sourcePath === sourcePath) searchImportCandidateRows(missingRows, 'missing tracks'); }, 0);
   }
 }
@@ -208,7 +256,89 @@ async function openVersionPicker(track, playAfter) {
   } catch (_) { if (request === versionPickerRequest) results.textContent = 'Could not search versions. Try again.'; }
 }
 
+function initPlaylistImportSourceControls() {
+  var importPl = $('import-playlist-btn');
+  var sourceModal = $('playlist-import-source-modal');
+  var linkFields = $('playlist-import-link-fields');
+  var linkStatus = $('playlist-import-url-status');
+  var linkInput = $('playlist-import-url');
+  var linkSubmit = $('playlist-import-url-submit');
+  var activeLinkRequest = '';
+  var linkGeneration = 0;
+  function cancelLinkImport() {
+    linkGeneration++;
+    if (activeLinkRequest && window.api.cancelPlaylistUrlImport) window.api.cancelPlaylistUrlImport(activeLinkRequest);
+    activeLinkRequest = '';
+    if (linkSubmit) linkSubmit.disabled = false;
+    if (sourceModal) hideModal(sourceModal);
+  }
+  if (window.api.onPlaylistUrlImportProgress) window.api.onPlaylistUrlImportProgress(function (progress) {
+    if (!progress || progress.requestId !== activeLinkRequest || !linkStatus) return;
+    linkStatus.textContent = progress.message + (progress.total ? ' ' + progress.done + ' / ' + progress.total : '');
+  });
+  if (importPl) importPl.addEventListener('click', function () { if (linkFields) { linkFields.hidden = true; linkFields.querySelector('.youtube-unavailable-follow')?.remove(); } if (linkStatus) linkStatus.textContent = ''; showModal(sourceModal); });
+  var fileChoice = $('playlist-import-file-choice');
+  var reimportAction = $('pctx-reimport');
+  if (reimportAction) reimportAction.addEventListener('click', async function () {
+    var pl = currentContextMenuPlaylist;
+    if (!pl || !pl.importSource || !pl.importSource.path) return;
+    try {
+      var result = pl.importSource.format === 'url'
+        ? await window.api.importPlaylistUrl(pl.importSource.path, 'reimport_' + Date.now())
+        : pl.importSource.format === 'spotify-login'
+          ? await window.api.importSpotifyAccountPlaylist(pl.importSource.path.replace(/^spotify:playlist:/, ''), 'reimport_' + Date.now())
+          : await window.api.importPlaylist();
+      if (!result || result.canceled) return;
+      if (!result.ok || !Array.isArray(result.records) || !result.records.length) { showToast((result && result.error) || 'Source playlist could not be read completely.'); return; }
+      if (result.sourcePath !== pl.importSource.path) { showToast('Select the same source file used for this playlist.'); return; }
+      await showPlaylistImportReview(result, pl);
+    } catch (error) { showToast('Reimport failed: ' + ((error && error.message) || String(error))); }
+  });
+  if (fileChoice) fileChoice.addEventListener('click', async function () {
+    hideModal(sourceModal);
+    try {
+      var result = await window.api.importPlaylist();
+      if (!result || result.canceled) return;
+      if (!result.ok || !result.records || result.records.length === 0) { showToast('No playlist entries were found in the selected file.'); return; }
+      hideModal($('settings-modal'));
+      await showPlaylistImportReview(result);
+    } catch (error) {
+      showToast('Playlist import failed: ' + ((error && error.message) || String(error || 'unknown error')));
+    }
+  });
+  var linkChoice = $('playlist-import-link-choice');
+  if (linkChoice) linkChoice.addEventListener('click', function () { linkFields.hidden = false; if (linkInput) linkInput.focus(); });
+  var sourceCancel = $('playlist-import-source-cancel');
+  if (sourceCancel) sourceCancel.addEventListener('click', cancelLinkImport);
+  if (sourceModal) sourceModal.addEventListener('click', function (event) { if (event.target === sourceModal) cancelLinkImport(); });
+  if (linkInput) linkInput.addEventListener('input', () => linkFields.querySelector('.youtube-unavailable-follow')?.remove());
+  if (linkInput) linkInput.addEventListener('keydown', function (event) { if (event.key === 'Enter') { event.preventDefault(); linkSubmit.click(); } });
+  if (linkSubmit) linkSubmit.addEventListener('click', async function () {
+    if (activeLinkRequest) return;
+    linkFields.querySelector('.youtube-unavailable-follow')?.remove();
+    var generation = ++linkGeneration;
+    var requestId = 'playlist_url_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+    activeLinkRequest = requestId;
+    linkSubmit.disabled = true;
+    linkStatus.textContent = 'Reading playlist…';
+    try {
+      var result = await window.api.importPlaylistUrl(linkInput.value.trim(), requestId);
+      if (generation !== linkGeneration) return;
+      if (!result || !result.ok) { linkStatus.textContent = result && result.cancelled ? 'Import cancelled.' : ((result && result.error) || 'Playlist could not be read.'); return; }
+      if (!result.records || !result.records.length) {
+        if (result.youtubePlaylistId) showUnavailableYouTubeLink(result, linkStatus);
+        else linkStatus.textContent = 'No tracks found in this playlist.';
+        return;
+      }
+      hideModal(sourceModal);
+      await showPlaylistImportReview(result);
+    } catch (error) { if (generation === linkGeneration) linkStatus.textContent = 'Playlist request failed. Check the connection and try again.'; }
+    finally { if (generation === linkGeneration) { activeLinkRequest = ''; linkSubmit.disabled = false; } }
+  });
+}
+
 function initImportReviewControls() {
+  initPlaylistImportSourceControls();
   initSearchSourcePicker();
   var versionAction = $('ctx-select-version');
   if (versionAction) versionAction.addEventListener('click', function () { if (currentContextMenuTrack) openVersionPicker(currentContextMenuTrack); });

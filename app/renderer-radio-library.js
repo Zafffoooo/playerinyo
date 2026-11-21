@@ -194,7 +194,7 @@ function startSongRadioFromSearch(track, previousQueue) {
   if (!provider || state.currentPlayingTrack !== track) return;
   songRadioPreviousQueue = previousQueue;
   var genreIds = ['song:' + track.playback.videoId];
-  var session = { stationId: createRadioStationId(), providerId: provider.id, provider: provider, providerSession: null, genreIds: genreIds, seed: { artist: track.artist, title: track.title }, trackCount: 1, refillPromise: null, refillError: '', starting: false, resolverRequestIds: new Set(), fillRequestIds: new Set(), transitionRequestIds: new Set(), candidateBacklog: [], playedTracks: [] };
+  var session = { stationId: createRadioStationId(), providerId: provider.id, provider: provider, providerSession: null, genreIds: genreIds, seed: { artist: track.artist, title: track.title, trackMbid: track.trackMbid || track.recordingMbid || '', artistMbid: track.artistMbid || '' }, trackCount: 1, refillPromise: null, refillError: '', starting: false, resolverRequestIds: new Set(), fillRequestIds: new Set(), transitionRequestIds: new Set(), candidateBacklog: [], playedTracks: [] };
   track.radioSessionId = session.stationId;
   track.sourceRadio = normalizeSourceRadio({ providerId: provider.id, genreIds: genreIds });
   state.playQueueTracks = [track];
@@ -312,7 +312,7 @@ function renderRadioRules() {
     var label = radioElement('label', 'radio-rule-toggle'); var input = document.createElement('input'); input.type = 'checkbox'; input.checked = prefs[row[0]] === true;
     input.addEventListener('change', function () {
       var next = getRadioPreferences(); next[row[0]] = input.checked; appSettings.radioPreferences = next;
-      if (row[0] === 'excludeKnownTracks' && state.radioSession && state.radioSession.providerId === 'lastfm' && state.radioSession.providerSession) {
+      if (row[0] === 'excludeKnownTracks' && state.radioSession && isGenreDiscoveryProvider(state.radioSession.providerId) && state.radioSession.providerSession) {
         state.radioSession.providerSession = Object.assign({}, state.radioSession.providerSession, { excludeKnownTracks: next.excludeKnownTracks === true });
         maybeRefillRadioQueue({ force: true });
       }
@@ -320,7 +320,7 @@ function renderRadioRules() {
     });
     var copy = radioElement('span', 'radio-rule-copy');
     copy.append(radioElement('span', '', row[1]));
-    var scope = row[0] === 'excludeKnownTracks' && state.radioSession && state.radioSession.providerId === 'lastfm'
+    var scope = row[0] === 'excludeKnownTracks' && state.radioSession && isGenreDiscoveryProvider(state.radioSession.providerId)
       ? 'Current station'
       : (state.radioSession ? 'Next resolution' : 'New stations');
     copy.appendChild(radioElement('small', 'radio-rule-scope', scope));
@@ -356,11 +356,17 @@ function renderRadioRules() {
 function renderRadioView() {
   var container = $('radio-container');
   if (!container) return;
+  if (!radioProviderEnabled(radioUiState.providerId)) {
+    radioUiState.providerId = 'local-library';
+    radioUiState.selectedGenreId = '';
+    radioUiState.genres = [];
+    radioUiState.loaded = false;
+  }
   var provider = getRadioProvider(radioUiState.providerId);
   container.replaceChildren();
   var header = radioElement('header', 'radio-view-header');
   var title = radioElement('h1', '', 'Radio'); title.id = 'radio-title';
-  var subtitle = radioElement('p', 'radio-subtitle', provider && provider.id === 'lastfm' ? 'Discover genre-based candidates through Last.fm, then play only verified local or YouTube matches.' : 'Choose one genre and begin a local station from your collection.');
+  var subtitle = radioElement('p', 'radio-subtitle', provider && isGenreDiscoveryProvider(provider.id) ? 'Discover genre-based tracks from ' + provider.label + '. Playback uses verified local or YouTube matches.' : 'Choose one genre and begin a local station from your collection.');
   header.append(title, subtitle);
   container.appendChild(header);
 
@@ -368,16 +374,13 @@ function renderRadioView() {
     container.appendChild(radioElement('p', 'radio-state radio-state-error', 'Radio provider is unavailable.'));
     return;
   }
-  if (provider && provider.id === 'local-library' && !state.musicFiles.length && !state.radioSession) {
-    container.appendChild(radioElement('p', 'radio-state', 'Your library is empty. Import music to start a radio station.'));
-    return;
-  }
+
 
   var controlBar = radioElement('div', 'radio-control-bar');
   var providerPanel = radioElement('div', 'radio-provider-panel');
   providerPanel.appendChild(radioElement('span', 'radio-field-label', 'PROVIDER'));
   var providerPicker = radioElement('div', 'radio-provider-picker');
-  (radioProviderRegistry ? radioProviderRegistry.list().filter(function (entry) { return entry.capabilities && entry.capabilities.genres; }) : []).forEach(function (candidateProvider) {
+  (radioProviderRegistry ? radioProviderRegistry.list().filter(function (entry) { return entry.capabilities && entry.capabilities.genres && radioProviderEnabled(entry.id); }) : []).forEach(function (candidateProvider) {
     var button = radioElement('button', 'btn btn-outline radio-provider-choice', candidateProvider.label);
     button.type = 'button'; button.classList.toggle('active', candidateProvider.id === radioUiState.providerId);
     button.disabled = !!state.radioSession || radioUiState.starting;
@@ -412,9 +415,13 @@ function renderRadioView() {
     controlBar.appendChild(stopButton);
   }
   container.appendChild(controlBar);
+  if (provider && provider.id === 'local-library' && !state.musicFiles.length && !state.radioSession) {
+    container.appendChild(radioElement('p', 'radio-state', 'Your library is empty. Import music to start a radio station.'));
+    return;
+  }
 
   if (radioUiState.preparation) container.appendChild(radioElement('p', 'radio-preparation-state', radioUiState.preparation));
-  if (provider.id === 'lastfm') container.appendChild(renderRadioRules());
+  if (isGenreDiscoveryProvider(provider.id)) container.appendChild(renderRadioRules());
   if (state.radioSession && state.radioSession.discoveryBias) {
     var bias = state.radioSession.discoveryBias; var biasNote = radioElement('div', 'radio-bias-note');
     biasNote.append(radioElement('span', '', 'More like: ' + bias.seedTrack.artist + ' — ' + bias.seedTrack.title + ' · ' + bias.remainingSelections + ' selections remaining'));
@@ -463,7 +470,7 @@ function renderRadioView() {
   picker.appendChild(search);
   var list = radioElement('div', 'radio-genre-list'); list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', 'Genres');
   var query = radioUiState.search.trim();
-  var visibleGenres = provider.id === 'lastfm' && window.RadioProviders && window.RadioProviders.searchLastfmGenreCatalog
+  var visibleGenres = isGenreDiscoveryProvider(provider.id) && window.RadioProviders && window.RadioProviders.searchLastfmGenreCatalog
     ? window.RadioProviders.searchLastfmGenreCatalog(query)
     : radioUiState.genres.filter(function (genre) { return !query || genre.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()); });
   if (!visibleGenres.length) list.appendChild(radioElement('p', 'radio-genre-empty', 'No genres match this search.'));
@@ -673,7 +680,7 @@ function getTrackArtworkUrl(track) {
   return '';
 }
 function isLastfmRadioTrack(track) {
-  return !!(track && state.radioSession && track.radioSessionId === state.radioSession.stationId && state.radioSession.providerId === 'lastfm');
+  return !!(track && state.radioSession && track.radioSessionId === state.radioSession.stationId && isGenreDiscoveryProvider(state.radioSession.providerId));
 }
 function makeQueueActionMarkup(track, includeRemove, removeIndex) {
   var actions = '<button type="button" class="icon-btn ghost btn-add-queue-playlist" aria-label="Add to playlist" title="Add to playlist"><i class="ph ph-plus" aria-hidden="true"></i></button>';
@@ -881,6 +888,13 @@ function switchView(viewId, addToHistory) {
     state.libraryScrollPos = ca ? ca.scrollTop : 0;
   }
 
+  if (state.currentView === 'playlists' && viewId !== 'playlists') {
+    playlistWorkspaceScroll = ca ? ca.scrollTop : 0;
+    var opened = document.getElementById(viewId);
+    playlistWorkspaceAnchor = opened && opened.parentElement === $('playlists-list') && !opened.hidden
+      ? { id: viewId, top: opened.getBoundingClientRect().top - ca.getBoundingClientRect().top }
+      : null;
+  }
   state.currentView = viewId;
   downloadQueuePanelOpen = viewId === 'downloads';
   var gs = $('global-search'); if (gs && viewId !== 'search') { gs.value = ''; var clearSearch = $('global-search-clear'); if (clearSearch) clearSearch.hidden = true; }
@@ -931,6 +945,10 @@ function switchView(viewId, addToHistory) {
     var navPlaylists = $('nav-playlists'); if (navPlaylists) { navPlaylists.classList.add('active'); navPlaylists.setAttribute('aria-current', 'page'); }
     if (pcontainer) pcontainer.style.display = 'block';
     renderSidebarPlaylists();
+    var anchor = playlistWorkspaceAnchor && document.getElementById(playlistWorkspaceAnchor.id);
+    if (ca) ca.scrollTop = anchor && !anchor.hidden
+      ? ca.scrollTop + anchor.getBoundingClientRect().top - ca.getBoundingClientRect().top - playlistWorkspaceAnchor.top
+      : playlistWorkspaceScroll;
   } else if (viewId === 'radio') {
     setViewKind('radio');
     $('view-title').style.display = 'none';
@@ -985,6 +1003,7 @@ function switchView(viewId, addToHistory) {
 }
 
 function renderHomeDashboard() {
+  renderListenbrainzFreshReleases();
   var renderGeneration = ++homeRenderGeneration;
   var emptyState = $('home-empty-library');
   var libraryContent = $('home-library-content');
@@ -1101,13 +1120,24 @@ function renderHomeDashboard() {
   var btnRefRandom = $('btn-refresh-random-albums');
   if (btnRefRandom) btnRefRandom.onclick = function() { renderHomeDashboard(); };
 
-  // Last.fm Recommendations
+  var useLastfmRecommendations = appSettings.lastfmProEnabled === true && appSettings.lastfmConnected;
+  var recommendationUsername = useLastfmRecommendations ? appSettings.lastfmUsername : appSettings.listenbrainzConnected ? appSettings.listenbrainzUsername : '';
+  var recommendationAccount = recommendationUsername ? (useLastfmRecommendations ? 'lastfm:' : 'listenbrainz:') + recommendationUsername : '';
+  if (state.recommendationAccount !== recommendationAccount) {
+    state.recommendationAccount = recommendationAccount;
+    state.lastfmRecentArtists = null;
+    state.lastfmSeenRecs = [];
+    state.lastfmRecsCache = null;
+  }
+  var fetchRecommendationArtists = useLastfmRecommendations ? window.api.getLastfmRecentArtists : window.api.getListenbrainzRecommendationArtists;
+  var fetchRecommendations = useLastfmRecommendations ? window.api.getLastfmRecommendations : window.api.getListenbrainzRecommendations;
+
   var btnRefLfm = $('btn-refresh-lastfm');
   var controls = $('lastfm-recommendation-controls');
   var prefs = Object.assign({ mode: 'recent', genres: [], artists: [] }, appSettings.lastfmRecommendationPrefs || {});
   if (!Array.isArray(prefs.artists) || (!prefs.artists.length && prefs.artist)) prefs.artists = prefs.artist ? [prefs.artist] : [];
-  if (appSettings.lastfmConnected) {
-    lfTxt.textContent = 'Connected as ' + appSettings.lastfmUsername;
+  if (recommendationAccount) {
+    lfTxt.textContent = recommendationUsername + ' · ' + (useLastfmRecommendations ? 'Last.fm' : 'ListenBrainz');
     recEmpty.style.display = 'none';
     if (controls) controls.hidden = false;
     var modeSelect = $('lastfm-recommendation-mode');
@@ -1162,16 +1192,14 @@ function renderHomeDashboard() {
     if (modeSelect) modeSelect.onchange = function () { prefs.mode = modeSelect.value; if (choiceSearch) choiceSearch.value = ''; updatePicker(); saveRecommendationPrefs(); };
     if (choiceSearch) { choiceSearch.oninput = renderRecommendationChoices; choiceSearch.onkeydown = function (event) { if (event.key === 'Enter') { event.preventDefault(); var add = choiceOptions && choiceOptions.querySelector('.recommendation-add-artist'); if (add) add.click(); } }; }
     updatePicker();
-    if (!state.lastfmRecentArtists) window.api.getLastfmRecentArtists().then(function (artists) {
+    if (!state.lastfmRecentArtists) fetchRecommendationArtists().then(function (artists) {
+      if (state.recommendationAccount !== recommendationAccount) return;
       state.lastfmRecentArtists = (artists || []).map(function (artist) { return { id: artist, label: artist }; });
       if (renderGeneration === homeRenderGeneration) { updatePicker(); if (prefs.mode === 'artist') loadRecommendations(true); }
-    }).catch(function () { state.lastfmRecentArtists = []; if (renderGeneration === homeRenderGeneration) updatePicker(); });
+    }).catch(function () { if (state.recommendationAccount !== recommendationAccount) return; state.lastfmRecentArtists = []; if (renderGeneration === homeRenderGeneration) updatePicker(); });
     if (!state.lastfmRecommendationGenres) {
-      var provider = getRadioProvider('lastfm');
-      if (provider) provider.listGenres(getRadioProviderContext()).then(function (genres) {
-        state.lastfmRecommendationGenres = genres || [];
-        if (renderGeneration === homeRenderGeneration) updatePicker();
-      }).catch(function () { if (choiceOptions && prefs.mode === 'genres') choiceOptions.textContent = 'Genres could not be loaded. Refresh to retry.'; });
+      state.lastfmRecommendationGenres = window.RadioProviders?.getLastfmGenreCatalog() || [];
+      updatePicker();
     }
     if (btnRefLfm) {
       btnRefLfm.style.display = 'flex';
@@ -1194,6 +1222,12 @@ function renderHomeDashboard() {
           var lazy = appSettings.lazyLoading ? ' loading="lazy"' : '';
           var cov = r.image ? '<img src="' + esc(r.image) + '" alt=""' + lazy + '/>' : '<i class="ph ph-music-notes" aria-hidden="true"></i>';
           card.innerHTML = '<div class="album-card-img-wrapper">' + cov + '</div><div class="album-card-info"><div class="album-card-title" title="' + esc(r.name) + '">' + esc(r.name) + '</div><div class="album-card-artist">' + esc(r.artist) + '</div></div>';
+          card.querySelector('img')?.addEventListener('error', function (event) {
+            var placeholder = document.createElement('i');
+            placeholder.className = 'ph ph-music-notes';
+            placeholder.setAttribute('aria-hidden', 'true');
+            event.target.replaceWith(placeholder);
+          });
           card.addEventListener('click', function () {
             artistSearchTrack(r.artist, r.name);
           });
@@ -1218,16 +1252,16 @@ function renderHomeDashboard() {
         recent.forEach(function (artist) { if (selected.length < 5 && !selected.some(function (value) { return value.toLocaleLowerCase() === artist.toLocaleLowerCase(); })) selected.push(artist); });
         sources = selected.map(function (artist) { return { label: 'Similar to ' + artist, request: { mode: 'artist', artist: artist } }; });
       } else sources = [{ label: 'From your listening', request: { mode: 'recent' } }];
-      var cacheKey = JSON.stringify({ mode: prefs.mode, sources: sources.map(function (source) { return source.request; }) });
+      var cacheKey = JSON.stringify({ account: recommendationAccount, mode: prefs.mode, sources: sources.map(function (source) { return source.request; }) });
       if (!force && state.lastfmRecsCache && state.lastfmRecsCacheKey === cacheKey && state.lastfmRecsCacheTime && (Date.now() - state.lastfmRecsCacheTime < 3600000)) {
         renderRecs(state.lastfmRecsCache);
         return;
       }
       if (!sources.length) { recGrid.innerHTML = '<div class="home-recommendations-state">' + (prefs.mode === 'genres' ? 'Choose at least one genre.' : 'Select an artist or wait for your recent artists to load.') + '</div>'; return; }
       recGrid.innerHTML = '<div class="home-recommendations-state"><i class="ph ph-spinner ph-spin" aria-hidden="true"></i><p>Fetching personalized recommendations...</p></div>';
-      Promise.all(sources.map(function (source) { return window.api.getLastfmRecommendations(Object.assign({}, source.request, { refresh: !!force })); })).then(function (results) {
+      Promise.all(sources.map(function (source) { return fetchRecommendations(Object.assign({}, source.request, { refresh: !!force })); })).then(function (results) {
         if (requestId !== state.lastfmRecommendationRequestId) return;
-        if (renderGeneration !== homeRenderGeneration || state.currentView !== 'home' || !state.musicFiles.length || !appSettings.lastfmConnected) return;
+        if (renderGeneration !== homeRenderGeneration || state.currentView !== 'home' || !state.musicFiles.length || state.recommendationAccount !== recommendationAccount) return;
         var errors = results.filter(function (result) { return result && result.error; });
         if (errors.length === results.length) throw new Error(errors[0].error);
         var seen = state.lastfmSeenRecs || (state.lastfmSeenRecs = []);
@@ -1265,8 +1299,7 @@ function renderHomeDashboard() {
 // FIX 1+2+3: Sidebar playlist render - grid fix, pin/lastPlayed separate, auto cover
 
 function renderSidebarPlaylists() {
-  var list = $('playlists-list'); if (!list) return; list.innerHTML = '';
-  if (state.currentView === 'playlists') renderSmartPlaylistsGrid();
+  var list = $('playlists-list'); if (!list) return; list.replaceChildren();
   var recentCovers = new Map();
   var libIndex = getLibraryIndex();
   var titleArtistMap = new Map();
@@ -1302,6 +1335,7 @@ function renderSidebarPlaylists() {
     return new Date(b.lastPlayed) - new Date(a.lastPlayed);
   });
   var sorted = pinned.concat(unpinned);
+  var folderIds = new Set((appSettings.playlistFolders || []).map(function (folder) { return folder.id; }));
 
   list.className = 'playlists-container playlists-grid';
   list.removeAttribute('style');
@@ -1326,6 +1360,9 @@ function renderSidebarPlaylists() {
     var isPlayingSource = state.sourcePlaylistId === pl.id;
     el.className = 'playlist-item playlist-card' + (pl.pinned ? ' pinned' : '') + (isActive ? ' active' : '') + (isPlayingSource ? ' playing-source' : '');
     el.id = pl.id;
+    el.dataset.source = getSavedPlaylistSource(pl);
+    el.dataset.folder = folderIds.has(pl.folderId) ? pl.folderId : '';
+    el.dataset.searchText = pl.name;
     if (isActive) el.setAttribute('aria-current', 'page');
 
     var trackCount = pl.tracks ? pl.tracks.length : 0;
@@ -1343,10 +1380,18 @@ function renderSidebarPlaylists() {
 
     el.addEventListener('click', function () { switchView(pl.id); });
     el.addEventListener('contextmenu', function (e) { e.preventDefault(); openPlaylistContextMenu(pl, e.clientX, e.clientY, el); });
-    if (!pl.isSpecial) bindPlaylistTrackDropTarget(el, pl);
+    if (!pl.isSpecial) {
+      bindPlaylistTrackDropTarget(el, pl);
+      el.draggable = true;
+      el.addEventListener('dragstart', function (event) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('application/x-playerinyo-playlist', pl.id);
+      });
+    }
     list.appendChild(el);
   });
-  renderPlaylistFolderGroups(list);
+  if (state.currentView === 'playlists') renderSmartPlaylistsGrid(list);
+  renderPlaylistFolderFilter();
   var dockPinned = state.playlists.filter(function (playlist) { return playlist.pinned; });
   var dockRecent = state.playlists.filter(function (playlist) { return !playlist.pinned; }).concat(pseudoLiked).sort(function (a, b) {
     return (Date.parse(b.lastPlayed || '') || 0) - (Date.parse(a.lastPlayed || '') || 0);
@@ -1354,7 +1399,7 @@ function renderSidebarPlaylists() {
   var dockPlaylists = dockPinned.concat(dockRecent);
   renderRecentPlaylistDock(dockPlaylists, recentCovers);
   var playlistSearch = $('playlist-search');
-  if (playlistSearch && playlistSearch.value) filterPlaylists(playlistSearch.value);
+  if (playlistSearch) filterPlaylists(playlistSearch.value);
 }
 
 function getEffectiveDockMode() {
@@ -1491,7 +1536,9 @@ function renderRecentPlaylistDock(playlists, covers) {
   var dock = $('dock-recent-playlists');
   if (!dock) return;
   applyDockMode();
-  dock.classList.remove('dock-capacity-ready');
+  var scroll = dock.scrollTop;
+  var focused = dock.contains(document.activeElement) && document.activeElement;
+  var focusId = focused && focused.closest('[data-playlist-id]')?.dataset.playlistId;
   dock.replaceChildren();
   dock.hidden = !playlists.length;
   if (document.body.dataset.dockMode === 'expanded') {
@@ -1506,9 +1553,13 @@ function renderRecentPlaylistDock(playlists, covers) {
     dock.setAttribute('aria-label', 'Playlists, recent first');
     playlists.forEach(function (playlist) { dock.appendChild(createDockPlaylistButton(playlist, covers)); });
   }
+  dock.scrollTop = scroll;
+  if (focusId) {
+    var card = Array.from(dock.querySelectorAll('[data-playlist-id]')).find(function (item) { return item.dataset.playlistId === focusId; });
+    card?.querySelector(focused.classList.contains('dock-playlist-play') ? '.dock-playlist-play' : '.dock-playlist-open')?.focus({ preventScroll: true });
+  }
   syncDockPlaylistStates();
   observeRecentPlaylistDock();
-  scheduleRecentPlaylistDockCapacityUpdate();
 }
 
 function updateDockPlayingNameOverflow() {
@@ -1545,74 +1596,49 @@ function syncDockPlaylistStates() {
   updateDockPlayingNameOverflow();
 }
 
-function scheduleRecentPlaylistDockCapacityUpdate() {
-  if (recentPlaylistDockCapacityFrame !== null) cancelAnimationFrame(recentPlaylistDockCapacityFrame);
-  recentPlaylistDockCapacityFrame = requestAnimationFrame(function () {
-    recentPlaylistDockCapacityFrame = null;
-    updateRecentPlaylistDockCapacity();
-    updateDockPlayingNameOverflow();
-  });
-}
-
 function observeRecentPlaylistDock() {
-  var dock = $('dock-recent-playlists');
-  if (!dock || recentPlaylistDockResizeObserver || typeof ResizeObserver === 'undefined') return;
-  recentPlaylistDockResizeObserver = new ResizeObserver(scheduleRecentPlaylistDockCapacityUpdate);
-  recentPlaylistDockResizeObserver.observe(dock);
+  if (recentPlaylistDockObserved) return;
+  recentPlaylistDockObserved = true;
   window.addEventListener('resize', function () {
     if (applyDockMode()) renderSidebarPlaylists();
-    else { scheduleRecentPlaylistDockCapacityUpdate(); updateDockPlayingNameOverflow(); }
   });
 }
 
-function updateRecentPlaylistDockCapacity() {
-  var dock = $('dock-recent-playlists');
-  if (!dock) return;
-  var buttons = Array.from(dock.querySelectorAll('.dock-recent-playlist'));
-  buttons.forEach(function (button) { button.classList.remove('dock-capacity-hidden'); });
-  if (dock.hidden || document.body.dataset.dockMode === 'expanded' || window.innerWidth <= 760 || !buttons.length) {
-    dock.classList.add('dock-capacity-ready');
-    return;
+function closePlaylistWorkspacePicker(picker) {
+  picker.open = false;
+  picker.querySelector('summary').focus();
+}
+
+var playlistWorkspaceScroll = 0;
+var playlistWorkspaceAnchor = null;
+var playlistWorkspaceSource = 'all';
+var playlistWorkspaceFolder = null;
+
+function getSavedPlaylistSource(playlist) {
+  var source = playlist.importSource || {};
+  if (source.format === 'listenbrainz') return 'listenbrainz';
+  if (['spotify-login', 'spotify-account'].includes(source.format)) return 'spotify';
+  if (source.format === 'youtube-archive') return 'youtube';
+  if (source.format === 'url') {
+    try {
+      var host = new URL(source.path).hostname;
+      if (host === 'open.spotify.com') return 'spotify';
+      if (['youtube.com', 'www.youtube.com', 'music.youtube.com', 'youtu.be'].includes(host)) return 'youtube';
+    } catch { return 'local'; }
   }
-  var styles = getComputedStyle(dock);
-  var padding = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
-  var gap = parseFloat(styles.rowGap || styles.gap) || 0;
-  var buttonHeight = buttons[0].offsetHeight || 36;
-  var availableHeight = Math.max(0, dock.clientHeight - padding);
-  var capacity = Math.max(0, Math.floor((availableHeight + gap) / (buttonHeight + gap)));
-  var visible = new Set(buttons.slice(0, capacity));
-  var priorityButtons = buttons.filter(function (button) { return button.classList.contains('viewed') || button.classList.contains('playing-source'); });
-  priorityButtons.slice(0, capacity).forEach(function (priorityButton) {
-    if (visible.has(priorityButton)) return;
-    var replacement = Array.from(visible).reverse().find(function (button) { return !priorityButtons.includes(button); });
-    if (replacement) visible.delete(replacement);
-    if (visible.size < capacity) visible.add(priorityButton);
-  });
-  buttons.forEach(function (button) { button.classList.toggle('dock-capacity-hidden', !visible.has(button)); });
-  dock.classList.add('dock-capacity-ready');
+  return 'local';
 }
 
-// FIX 9: playlist search - filters on name, case-insensitive, works for both list/grid
 function filterPlaylists(q) {
   var query = String(q || '').trim().toLowerCase();
-  var visibleRegular = 0;
-  document.querySelectorAll('#playlists-list .playlist-item').forEach(function (el) {
-    var nameEl = el.querySelector('.playlist-card-title');
-    var txt = nameEl ? nameEl.textContent.toLowerCase() : el.textContent.toLowerCase();
-    var visible = txt.includes(query);
-    el.style.display = visible ? '' : 'none';
-    if (visible) visibleRegular++;
+  var visible = 0;
+  document.querySelectorAll('#playlists-list > button').forEach(function (card) {
+    card.hidden = (playlistWorkspaceSource !== 'all' && playlistWorkspaceSource !== card.dataset.source) ||
+      (playlistWorkspaceFolder !== null && playlistWorkspaceFolder !== card.dataset.folder) ||
+      !String(card.dataset.searchText || '').toLowerCase().includes(query);
+    if (!card.hidden) visible++;
   });
-  var visibleSmart = 0;
-  document.querySelectorAll('#smart-mixes-list .smart-mix-card').forEach(function (el) {
-    var visible = String(el.dataset.searchText || el.textContent || '').toLowerCase().includes(query);
-    el.style.display = visible ? '' : 'none';
-    if (visible) visibleSmart++;
-  });
-  var smartSection = $('smart-mixes-section'); if (smartSection) smartSection.hidden = visibleSmart === 0;
-  var regularSection = $('regular-playlists-section'); if (regularSection) regularSection.hidden = visibleRegular === 0 && !!query;
-  document.querySelectorAll('#playlists-list .playlist-folder').forEach(function (folder) { var body=folder.querySelector('.playlists-grid'); var visible=Array.from(body.querySelectorAll('.playlist-item')).some(function(card) { return card.style.display !== 'none'; }); folder.hidden=!!query && !visible; var info=(appSettings.playlistFolders || []).find(function(f) { return f.id===folder.dataset.folderId; }); body.hidden=query && visible ? false : !!(info && info.collapsed); });
-  var empty = $('playlist-search-empty'); if (empty) empty.hidden = visibleSmart + visibleRegular > 0;
+  $('playlist-search-empty').hidden = visible > 0;
 }
 
 // FIX 6: album play button state - track which album is active

@@ -62,7 +62,7 @@
             <i class="ph ph-download-simple" aria-hidden="true"></i>
             <span>Downloads</span>
             <b id="download-queue-badge" class="download-queue-badge"></b>
-            <div class="download-dock-progress" id="download-dock-progress" hidden><span class="download-dock-top"><span id="download-dock-label"></span><span id="download-dock-count"></span></span><span class="download-dock-track"><span id="download-dock-bar"></span></span></div>
+            <div class="download-dock-progress" id="download-dock-progress" hidden><span class="download-dock-top"><span class="download-dock-label-window"><span id="download-dock-label"></span></span><span id="download-dock-count"></span></span><span class="download-dock-track"><span id="download-dock-bar"></span></span></div>
           </button>
           <button type="button" class="nav-item" id="nav-health">
             <i class="ph ph-stethoscope" aria-hidden="true"></i>
@@ -73,7 +73,7 @@
             <span>History</span>
           </button>
         </div>
-        <div class="dock-recent-playlists" id="dock-recent-playlists" aria-label="Playlists, recent first" hidden></div>
+        <div class="dock-recent-playlists" id="dock-recent-playlists" aria-label="Playlists, recent first" tabindex="0" hidden></div>
         <div class="dock-utilities" aria-label="Application tools">
           <button class="nav-item dock-tool" id="btn-shortcuts-help" title="Shortcuts and search help" aria-label="Shortcuts and search help"><i class="ph ph-question" aria-hidden="true"></i></button>
           <button class="nav-item dock-tool" id="btn-settings" title="Settings" aria-label="Open settings"><i class="ph ph-gear" aria-hidden="true"></i><span>Settings</span></button>
@@ -173,32 +173,33 @@
               </div>
               <div class="playlist-workspace-actions">
                 <button class="btn btn-outline" id="import-playlist-btn"><i class="ph ph-file-arrow-up" aria-hidden="true"></i> Import Playlist</button>
-                <button class="btn btn-outline" id="create-smart-mix-btn"><i class="ph ph-sparkle" aria-hidden="true"></i> New Smart Playlist</button>
-                <button class="btn btn-primary" id="create-playlist-btn"><i class="ph ph-plus" aria-hidden="true"></i> New playlist</button>
+                <details class="playlist-workspace-picker" id="playlist-create-picker">
+                  <summary class="btn btn-primary"><i class="ph ph-plus" aria-hidden="true"></i> New playlist</summary>
+                  <div class="playlist-workspace-options">
+                    <button type="button" class="btn btn-outline" id="create-playlist-btn">Normal playlist</button>
+                    <button type="button" class="btn btn-outline" id="create-smart-mix-btn">Smart playlist</button>
+                  </div>
+                </details>
               </div>
             </header>
-            <label class="playlist-workspace-search" for="playlist-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="search" id="playlist-search" placeholder="Search playlists" /></label>
-            <p class="playlist-search-empty" id="playlist-search-empty" hidden>No playlists or Smart Playlists match this search.</p>
-            <section class="playlist-workspace-section" id="smart-mixes-section" aria-labelledby="smart-mixes-title">
-              <header class="playlist-workspace-section-head">
-                <div>
-                  <h2 id="smart-mixes-title">Smart Playlists</h2>
-                  <p>Live selections shaped from your local library.</p>
-                </div>
-              </header>
-              <div class="smart-mixes-grid" id="smart-mixes-list"></div>
-            </section>
-            <section class="playlist-workspace-section" id="regular-playlists-section" aria-labelledby="regular-playlists-title">
-              <header class="playlist-workspace-section-head">
-                <div>
-                  <h2 id="regular-playlists-title">Playlists</h2>
-                  <p>Hand-built sequences and imported lists.</p>
-                </div>
-              </header>
-              <div class="playlists-container playlists-grid" id="playlists-list"></div>
-            </section>
+            <div class="playlist-workspace-toolbar">
+              <label class="playlist-workspace-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input type="search" id="playlist-search" aria-label="Search playlists" placeholder="Search playlists" /></label>
+              <details class="playlist-workspace-picker">
+                <summary class="btn btn-outline" id="playlist-folder-summary">All folders</summary>
+                <div class="playlist-workspace-options" id="playlist-folder-options"></div>
+              </details>
+            </div>
+            <div id="playlist-source-filters" class="playlist-source-filters" role="group" aria-label="Playlist source">
+              <button class="btn btn-outline" type="button" data-source="all" aria-pressed="true">All</button>
+              <button class="btn btn-outline" type="button" data-source="local" aria-pressed="false">Local</button>
+              <button class="btn btn-outline" type="button" data-source="youtube" aria-pressed="false">YouTube Music</button>
+              <button class="btn btn-outline" type="button" data-source="spotify" aria-pressed="false">Spotify</button>
+              <button class="btn btn-outline" type="button" data-source="smart" aria-pressed="false">Smart</button>
+              <button class="btn btn-outline" type="button" data-source="listenbrainz" aria-pressed="false">ListenBrainz</button>
+            </div>
+            <p class="playlist-search-empty" id="playlist-search-empty" hidden>No playlists match these filters.</p>
+            <div class="playlists-container playlists-grid" id="playlists-list"></div>
           </section>
-
           <!-- Home Dashboard -->
           <div id="home-dashboard-container" style="display:block;padding-bottom:40px;">
 
@@ -280,7 +281,7 @@
             <section class="home-shelf home-shelf-lastfm" aria-labelledby="recommended-heading">
               <div class="home-shelf-header">
                 <div>
-                  <h2 id="recommended-heading"><i class="ph-fill ph-lastfm-logo" aria-hidden="true"></i> Recommended for you</h2>
+                  <h2 id="recommended-heading"><i class="ph ph-music-notes" aria-hidden="true"></i> Recommended for you</h2>
                   <p id="lastfm-status-text">Not connected</p>
                 </div>
                 <div class="home-recommendation-actions"><div class="home-recommendation-controls" id="lastfm-recommendation-controls" hidden>
@@ -292,11 +293,19 @@
               </div>
               <div class="albums-grid" id="home-recommendations"></div>
               <div id="home-recommendations-empty" class="home-recommendations-empty">
-                <i class="ph-fill ph-lastfm-logo" aria-hidden="true"></i>
-                Connect Last.fm in Settings to get recommendations based on your listening history.
+                <i class="ph ph-music-notes" aria-hidden="true"></i>
+                Connect ListenBrainz in Settings to get recommendations based on your listening history.
               </div>
             </section>
             </div>
+            <section class="home-shelf home-fresh-releases" id="home-fresh-releases" aria-labelledby="home-fresh-releases-heading" hidden>
+              <div class="home-shelf-header">
+                <div><h2 id="home-fresh-releases-heading">Fresh releases</h2><p>Recent and upcoming albums from your ListenBrainz listening history.</p></div>
+                <button class="btn btn-outline" id="home-fresh-releases-retry" type="button">Refresh</button>
+              </div>
+              <p class="connection-status" id="home-fresh-releases-status" role="status"></p>
+              <div class="albums-grid" id="home-fresh-releases-grid"></div>
+            </section>
           </div>
 
           <!-- Albums Grid -->
@@ -433,7 +442,7 @@
           </div>
 
           <div class="player-extras">
-            <button class="icon-btn ghost" id="btn-lastfm-login" title="Connect to Last.fm"><i class="ph-fill ph-lastfm-logo" id="lastfm-icon"></i></button>
+            <button class="icon-btn ghost" id="btn-connections" title="Connections" aria-label="Connections"><i class="ph ph-plugs" id="connections-icon" aria-hidden="true"></i></button>
             <button class="icon-btn ghost" id="btn-eq" title="Equalizer"><i class="ph ph-sliders"></i></button>
             <button class="icon-btn ghost studio-tab" id="btn-queue-toggle" title="Queue" aria-label="Open queue" aria-expanded="false" aria-controls="queue-panel"><i class="ph ph-queue" aria-hidden="true"></i><span class="sr-only">Queue</span></button>
             <button class="icon-btn ghost studio-tab" id="btn-lyrics-toggle" title="Lyrics" aria-label="Open lyrics" aria-expanded="false" aria-controls="lyrics-panel"><i class="ph ph-microphone-stage" aria-hidden="true"></i><span class="sr-only">Lyrics</span></button>
@@ -632,10 +641,81 @@
     </div>
   </div>
 
+  <div id="youtube-playlist-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="youtube-hub-title">
+    <div class="modal-content youtube-playlist-dialog">
+      <header class="connection-heading">
+        <h2 id="youtube-hub-title">YouTube Music</h2>
+        <button id="youtube-hub-close" class="icon-btn ghost" aria-label="Close YouTube Music" type="button"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </header>
+      <form id="youtube-hub-link-form" class="connection-fields">
+        <label for="youtube-hub-url">Public or unlisted playlist link</label>
+        <div class="connection-actions youtube-link-fields">
+          <input type="url" id="youtube-hub-url" class="meta-inp" placeholder="https://music.youtube.com/playlist?list=…" autocomplete="off" required>
+          <button id="youtube-hub-link" class="btn btn-primary" type="submit">Read playlist</button>
+        </div>
+        <p id="youtube-hub-link-status" class="connection-status" role="status"></p>
+      </form>
+      <div class="connection-actions" role="group" aria-label="YouTube Music archive">
+        <button id="youtube-hub-followed" class="btn btn-outline" type="button">Followed links</button>
+        <button id="youtube-hub-archive" class="btn btn-outline" type="button">Local archive</button>
+      </div>
+      <div id="youtube-hub-content" class="youtube-hub-content">
+        <div id="youtube-archive-tools" class="connection-fields" hidden>
+          <div class="connection-actions">
+            <button id="youtube-archive-file" class="btn btn-outline" type="button">Add Takeout or CSV</button>
+            <button id="youtube-archive-paste" class="btn ghost" type="button" aria-expanded="false">Paste track CSV</button>
+          </div>
+          <form id="youtube-archive-form" class="connection-fields" hidden>
+            <label for="youtube-archive-name">Playlist name</label>
+            <input id="youtube-archive-name" class="meta-inp" required maxlength="150">
+            <label for="youtube-archive-text">CSV with Song and Artist columns</label>
+            <textarea id="youtube-archive-text" class="meta-inp" rows="4" required placeholder="Song,Artist"></textarea>
+            <button class="btn btn-primary" type="submit">Save to archive</button>
+          </form>
+          <form id="youtube-recovery-form" class="connection-fields">
+            <label for="youtube-recovery-artist">Find a missing track by artist</label>
+            <div class="connection-input-action">
+              <input id="youtube-recovery-artist" class="meta-inp" required>
+              <button class="btn btn-outline" type="submit">Search history</button>
+            </div>
+          </form>
+          <label for="youtube-archive-search">Search archive</label>
+          <input id="youtube-archive-search" type="search" class="meta-inp" placeholder="Playlist, track or artist">
+        </div>
+        <p id="youtube-hub-status" class="connection-status" role="status"></p>
+        <div id="youtube-hub-list" class="youtube-hub-list"></div>
+        <section id="youtube-hub-preview" class="connection-fields" hidden></section>
+      </div>
+    </div>
+  </div>
+
+  <div id="listenbrainz-playlists-modal" class="modal-overlay" aria-labelledby="listenbrainz-playlists-title">
+    <section class="modal-content listenbrainz-playlists" id="listenbrainz-playlists">
+      <header class="playlist-workspace-section-head">
+        <h2 id="listenbrainz-playlists-title">ListenBrainz playlists</h2>
+        <button id="listenbrainz-playlists-close" class="icon-btn ghost" type="button" aria-label="Close ListenBrainz playlists"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </header>
+      <p id="listenbrainz-playlists-status" class="connection-status" role="status"></p>
+      <button id="listenbrainz-playlists-retry" class="btn btn-outline" type="button" hidden>Retry</button>
+      <div id="listenbrainz-playlist-list" class="listenbrainz-playlist-list"></div>
+      <section id="listenbrainz-playlist-preview" class="listenbrainz-playlist-preview" aria-labelledby="listenbrainz-preview-title" hidden>
+        <header>
+          <div><h3 id="listenbrainz-preview-title" tabindex="-1"></h3><p id="listenbrainz-preview-status" class="connection-status" role="status"></p></div>
+          <button id="listenbrainz-preview-close" class="icon-btn ghost" type="button" aria-label="Close playlist preview"><i class="ph ph-x" aria-hidden="true"></i></button>
+        </header>
+        <div class="connection-actions">
+          <button id="listenbrainz-preview-play" class="btn btn-primary" type="button" disabled>Play matched tracks</button>
+          <button id="listenbrainz-preview-import" class="btn btn-outline" type="button" disabled>Review import</button>
+        </div>
+        <ol id="listenbrainz-preview-tracks" tabindex="0" aria-label="Playlist tracks"></ol>
+      </section>
+    </section>
+  </div>
+
   <div id="playlist-import-source-modal" class="modal-overlay">
     <div class="modal-content playlist-source-modal">
       <h2 id="playlist-import-source-title">Import Playlist</h2>
-      <div class="playlist-source-choice"><button type="button" class="btn btn-outline" id="playlist-import-file-choice">File</button><button type="button" class="btn btn-outline" id="playlist-import-link-choice">Link</button><button type="button" class="btn btn-outline" id="playlist-import-account-choice">Spotify account</button></div>
+      <div class="playlist-source-choice"><button type="button" class="btn btn-outline" id="playlist-import-file-choice">File</button><button type="button" class="btn btn-outline" id="playlist-import-link-choice">Link</button><button type="button" class="btn btn-outline" id="playlist-import-account-choice">Spotify account</button><button type="button" class="btn btn-outline" id="youtube-playlist-open">YouTube archive &amp; followed links</button><button type="button" class="btn btn-outline" id="listenbrainz-playlists-open">ListenBrainz</button></div>
       <div id="playlist-import-account-fields" class="spotify-account-import" hidden>
         <p id="spotify-account-status" role="status" aria-live="polite"></p>
         <div class="spotify-account-actions"><button type="button" class="btn btn-primary" id="spotify-account-connect">Connect Spotify</button><button type="button" class="btn btn-outline" id="spotify-account-disconnect" hidden>Disconnect</button><button type="button" class="btn btn-outline" id="spotify-account-refresh" hidden>Refresh playlists</button></div>
@@ -645,7 +725,7 @@
         <button type="button" class="btn btn-outline" id="spotify-account-cancel-import" hidden>Cancel reading</button>
       </div>
       <div id="playlist-import-link-fields" hidden>
-        <label for="playlist-import-url">Public Spotify or YouTube Music playlist URL</label>
+        <label for="playlist-import-url">Spotify or YouTube Music playlist URL</label>
         <input type="url" id="playlist-import-url" class="meta-inp" placeholder="https://music.youtube.com/playlist?list=…" autocomplete="off">
         <p id="playlist-import-url-status" role="status" aria-live="polite"></p>
         <button type="button" class="btn btn-primary" id="playlist-import-url-submit">Read playlist</button>
@@ -665,6 +745,10 @@
         </div>
         <button class="icon-btn ghost" id="playlist-import-cancel-x" title="Cancel"><i class="ph ph-x"></i></button>
       </div>
+      <div id="playlist-import-youtube" class="connection-actions playlist-import-youtube" hidden>
+        <button id="playlist-import-follow-youtube" class="btn btn-outline" type="button">Follow link</button>
+        <p id="playlist-import-youtube-status" class="connection-status" role="status"></p>
+      </div>
       <div class="playlist-import-options" id="playlist-import-options">
         <label for="playlist-import-conflict">Same-name playlists</label>
         <select id="playlist-import-conflict">
@@ -673,6 +757,7 @@
           <option value="replace">Replace existing tracks</option>
         </select>
       </div>
+      <div id="playlist-import-archive-target" class="playlist-import-options" hidden><label for="playlist-import-archive-playlist">Destination</label><select id="playlist-import-archive-playlist"></select></div>
       <fieldset id="playlist-import-group-choice" class="playlist-import-group-choice" hidden><legend>Playlists to import</legend><div id="playlist-import-group-list"></div></fieldset>
       <div class="playlist-import-toolbar" id="playlist-import-download-tools">
         <span class="playlist-import-toolbar-title">Download selected missing tracks</span>
@@ -750,7 +835,7 @@
   </div>
 
   <!-- Settings Modal -->
-  <div id="settings-modal" class="modal-overlay">
+  <div id="settings-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="modal-content settings-dialog">
       <div class="settings-modal-head">
         <h2 id="settings-title">Settings</h2>
@@ -760,17 +845,16 @@
         <nav class="settings-nav" aria-label="Settings sections">
           <button type="button" class="settings-nav-item" data-settings-page="playback">Playback &amp; Audio</button>
           <button type="button" class="settings-nav-item active" data-settings-page="library" aria-current="page">Music Library</button>
+          <button type="button" class="settings-nav-item" data-settings-page="connections">Connections</button>
           <button type="button" class="settings-nav-item" data-settings-page="downloads">Downloads</button>
-          <button type="button" class="settings-nav-item" data-settings-page="metadata">Metadata Sources</button>
           <button type="button" class="settings-nav-item" data-settings-page="appearance">Appearance</button>
-          <button type="button" class="settings-nav-item" data-settings-page="discord">Discord</button>
           <button type="button" class="settings-nav-item" data-settings-page="application">Application</button>
           <button type="button" class="settings-nav-item" data-settings-page="performance">Performance</button>
           <button type="button" class="settings-nav-item" data-settings-page="data">Backup &amp; Data</button>
         </nav>
       <div class="settings-sections" id="settings-sections">
-      <details class="settings-section" name="settings-section" data-settings-page="playback">
-        <summary>Playback &amp; Audio</summary>
+      <section class="settings-section" data-settings-page="playback">
+        <h3 class="settings-page-heading">Playback &amp; Audio</h3>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
         <div>
@@ -814,10 +898,10 @@
         </div>
       </div>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="library" open>
-        <summary>Music Library</summary>
+      <section class="settings-section" data-settings-page="library">
+        <h3 class="settings-page-heading">Music Library</h3>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;">
@@ -837,13 +921,14 @@
             <i class="ph ph-git-diff" style="margin-right:6px;"></i> Review Moved Files
           </button>
         </div>
+        <fieldset class="connection-fields" id="library-watch-folders"><legend>Watch library folders</legend><div id="library-watch-roots"></div><p id="library-watch-status" class="connection-status" role="status"></p></fieldset>
         <p class="setting-explainer"><strong>folder.jpg</strong> writes the current album artwork beside your audio files so other players can reuse it.</p>
       </div>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="downloads">
-        <summary>Downloads</summary>
+      <section class="settings-section" data-settings-page="downloads">
+        <h3 class="settings-page-heading">Downloads</h3>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
         <div style="font-size:11px;color:var(--text-subdued);margin-bottom:8px;line-height:1.4;">Missing playlist tracks are saved as Artist / Album / Song.</div>
@@ -886,22 +971,90 @@
         </div>
       </div>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="metadata">
-        <summary>Metadata Sources</summary>
+      <section class="settings-section connections-settings" data-settings-page="connections">
+        <h3 class="settings-page-heading">Connections</h3>
         <div class="settings-section-body">
-      <div class="setting-item" style="margin-bottom:12px;flex-direction:column;align-items:flex-start;">
-        <label for="setting-discogs-token" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Discogs Personal Access Token</label>
-        <input type="password" id="setting-discogs-token" class="meta-inp" placeholder="Optional: enables Discogs Auto-Tag fallback" style="width:100%;font-size:12px;">
-        <div style="font-size:11px;color:var(--text-subdued);margin-top:6px;line-height:1.4;">MusicBrainz, iTunes and Deezer work without a token. Discogs is available when its token is saved.</div>
-        <div id="safe-storage-status" style="font-size:11px;color:var(--text-subdued);margin-top:8px;line-height:1.4;"></div>
-      </div>
-        </div>
-      </details>
+          <section class="connection-service" aria-labelledby="listenbrainz-heading">
+            <header class="connection-heading">
+              <div>
+                <h3 id="listenbrainz-heading">ListenBrainz</h3>
+                <p>Scrobbles, listening history, and recommendations.</p>
+              </div>
+              <span id="listenbrainz-username" class="connection-account"></span>
+            </header>
+            <form id="listenbrainz-connect-form" class="connection-fields">
+              <label for="listenbrainz-token">User token</label>
+              <div class="connection-input-action">
+                <input id="listenbrainz-token" type="password" class="meta-inp" autocomplete="off" required>
+                <button id="listenbrainz-connect" class="btn btn-primary" type="submit">Verify and connect</button>
+              </div>
+            </form>
+            <div id="listenbrainz-connected-actions" class="connection-actions" hidden>
+              <button id="listenbrainz-import-history" class="btn btn-outline" type="button">Import full listening history</button>
+              <button id="listenbrainz-disconnect" class="btn ghost" type="button">Disconnect</button>
+            </div>
+            <div id="listenbrainz-outbox" class="connection-option connection-outbox" hidden>
+              <div>
+                <strong>Scrobble queue</strong>
+                <p id="listenbrainz-outbox-status" class="connection-status" role="status"></p>
+              </div>
+              <button id="listenbrainz-outbox-retry" class="btn btn-outline" type="button" hidden>Retry now</button>
+            </div>
+            <p id="listenbrainz-status" class="connection-status" role="status"></p>
+            <p id="listenbrainz-history-status" class="connection-status" role="status"></p>
+            <label class="connection-option">
+              <span>Genre Radio</span>
+              <input id="setting-listenbrainz-genre-radio" class="setting-switch" type="checkbox" checked>
+            </label>
+          </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="appearance">
-        <summary>Appearance</summary>
+          <section class="connection-service" aria-labelledby="lastfm-heading">
+            <header class="connection-heading">
+              <div><h3 id="lastfm-heading">Last.fm</h3><p>Optional connection with your own Pro API key.</p></div>
+              <span id="lastfm-connection-account" class="connection-account"></span>
+            </header>
+            <label class="connection-option">
+              <span>Use my Last.fm Pro key</span>
+              <input id="setting-lastfm-pro" class="setting-switch" type="checkbox">
+            </label>
+            <div id="lastfm-connection-options" hidden>
+              <label class="connection-option">
+                <span>Scrobble directly to Last.fm</span>
+                <input id="setting-lastfm-scrobble" class="setting-switch" type="checkbox">
+              </label>
+              <button id="btn-lastfm-login" class="btn btn-outline" type="button">Connect Last.fm</button>
+              <div id="lastfm-credentials" class="connection-fields" hidden>
+                <label for="lastfm-api-key">API key</label>
+                <input id="lastfm-api-key" type="password" class="meta-inp" autocomplete="off">
+                <label for="lastfm-shared-secret">Shared secret</label>
+                <input id="lastfm-shared-secret" type="password" class="meta-inp" autocomplete="off">
+                <button id="lastfm-api-link" type="button" class="text-link">Create Last.fm API credentials</button>
+                <div class="connection-actions">
+                  <button id="btn-lastfm-open-browser" class="btn btn-primary" type="button">1. Authorize in browser</button>
+                  <button id="btn-lastfm-confirm" class="btn btn-outline" type="button" disabled>2. Confirm authorization</button>
+                  <button id="btn-lastfm-cancel" class="btn ghost" type="button">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="connection-service" aria-labelledby="discogs-heading">
+            <header class="connection-heading">
+              <div><h3 id="discogs-heading">Discogs</h3><p>Optional metadata source for Auto-Tag.</p></div>
+            </header>
+            <div class="connection-fields">
+              <label for="setting-discogs-token">Personal access token</label>
+              <input type="password" id="setting-discogs-token" class="meta-inp" autocomplete="off">
+            </div>
+          </section>
+          <p id="safe-storage-status" class="connection-storage"></p>
+        </div>
+      </section>
+
+      <section class="settings-section" data-settings-page="appearance">
+        <h3 class="settings-page-heading">Appearance</h3>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
         <div>
@@ -919,10 +1072,10 @@
         <input type="checkbox" class="setting-switch" id="setting-native-titlebar" />
       </div>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="application">
-        <summary>Application</summary>
+      <section class="settings-section" data-settings-page="application">
+        <h3 class="settings-page-heading">Application</h3>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
         <div>
@@ -950,10 +1103,10 @@
         </div>
       </div>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="discord">
-        <summary>Discord</summary>
+      <section class="settings-section" data-settings-page="connections">
+        <h3 class="settings-page-heading">Discord</h3>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:16px;">
         <div>
@@ -1006,10 +1159,10 @@
       </div>
       </details>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="performance">
-        <summary>Performance</summary>
+      <section class="settings-section" data-settings-page="performance">
+        <h3 class="settings-page-heading">Performance</h3>
         <div class="settings-section-body">
       <div class="setting-item" style="margin-bottom:12px;">
         <div>
@@ -1027,10 +1180,10 @@
         <input type="checkbox" class="setting-switch" id="setting-lazy-loading" />
       </div>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section" name="settings-section" data-settings-page="data">
-        <summary>Backup &amp; Restore</summary>
+      <section class="settings-section" data-settings-page="data">
+        <h3 class="settings-page-heading">Backup &amp; Restore</h3>
         <div class="settings-section-body">
       <div class="backup-automation">
         <div class="setting-item backup-automation-toggle">
@@ -1063,17 +1216,17 @@
         </button>
       </div>
         </div>
-      </details>
+      </section>
 
-      <details class="settings-section danger-zone" name="settings-section" data-settings-page="data">
-        <summary>Danger Zone</summary>
+      <section class="settings-section danger-zone" data-settings-page="data">
+        <h3 class="settings-page-heading">Danger Zone</h3>
         <div class="settings-section-body">
           <p>Clearing removes Playerinyo's local index. Audio files and playlists stay untouched, and you can undo the change during this session.</p>
           <button class="btn btn-danger-subtle" id="clear-library-btn" style="justify-content:center;padding:8px;">
             <i class="ph ph-trash" aria-hidden="true"></i> Clear Library
           </button>
         </div>
-      </details>
+      </section>
       </div>
       </div>
       <button class="btn btn-primary" id="btn-close-settings" style="width:100%;justify-content:center;">Done</button>
@@ -1137,7 +1290,7 @@
       <div id="srp-rules" class="smart-mix-fieldset" aria-label="Playlist rules"></div>
       <button type="button" class="btn btn-outline" id="srp-add-rule"><i class="ph ph-plus" aria-hidden="true"></i> Add rule</button>
       <p class="smart-mix-builder-error" id="srp-error" role="alert" hidden></p>
-      <div class="smart-mix-preview" role="status" aria-live="polite"><strong id="srp-preview-num">0</strong><span> matching tracks</span></div>
+      <div class="smart-mix-preview" role="status" aria-live="polite"><strong id="srp-preview-num">0</strong><span> matching tracks</span><ol id="srp-preview-tracks"></ol></div>
       <div class="smart-mix-builder-actions"><button class="btn btn-outline" id="srp-cancel">Cancel</button><button class="btn btn-primary" id="srp-save">Create Playlist</button></div>
     </div>
   </div>
@@ -1150,15 +1303,16 @@
   <div id="create-playlist-modal" class="modal-overlay">
     <div class="modal-content" style="width:420px;">
       <h2 style="margin-top:0;margin-bottom:20px;">Create Playlist</h2>
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px;color:var(--text-subdued);display:block;margin-bottom:6px;"for="cp-name-input">PLAYLIST NAME</label>
+        <input type="text" id="cp-name-input" maxlength="120" required placeholder="My Playlist"
+          style="width:100%;padding:10px 12px;border-radius:6px;border:none;background:#333;color:white;font-size:14px;box-sizing:border-box;" />
+      </div>
+      <label class="playlist-form-field">Folder (optional)<select id="cp-folder"></select></label>
       <div id="cp-cover-drop" class="cover-drop-zone" role="button" tabindex="0" aria-label="Choose playlist cover image">
         <i class="ph ph-image" style="font-size:40px;color:var(--text-subdued);"></i>
-        <p style="margin:8px 0 0;color:var(--text-subdued);font-size:13px;">Drag & drop cover or click to browse</p>
+        <p style="margin:8px 0 0;color:var(--text-subdued);font-size:13px;">Choose a cover (optional)</p>
         <img id="cp-cover-preview" src="../assets/icon.png" alt="" style="display:none;width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;border-radius:6px;" />
-      </div>
-      <div style="margin-bottom:16px;">
-        <label style="font-size:12px;color:var(--text-subdued);display:block;margin-bottom:6px;">PLAYLIST NAME</label>
-        <input type="text" id="cp-name-input" placeholder="My Playlist"
-          style="width:100%;padding:10px 12px;border-radius:6px;border:none;background:#333;color:white;font-size:14px;box-sizing:border-box;" />
       </div>
       <div style="margin-bottom:24px;">
         <label style="font-size:12px;color:var(--text-subdued);display:block;margin-bottom:8px;">COLOR THEME</label>
@@ -1485,43 +1639,6 @@
     </div>
   </div>
 
-  <!-- Last.fm Auth Modal -->
-  <div id="lastfm-modal" class="modal-overlay">
-    <div class="modal-content" style="width:400px;">
-      <div style="text-align:center;margin-bottom:24px;">
-        <i class="ph-fill ph-lastfm-logo" style="font-size:64px;color:var(--text-base);margin-bottom:12px;"></i>
-        <h2 style="margin:0;">Connect Last.fm</h2>
-        <p style="color:var(--text-subdued);font-size:13px;margin-top:8px;line-height:1.4;">
-          Personalize your experience with scrobbling and recommendations.
-        </p>
-      </div>
-
-      <div id="lastfm-api-inputs" style="margin-bottom:20px;">
-        <div style="margin-bottom:12px;">
-          <label for="lastfm-api-key" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;">Last.fm API Key</label>
-          <input type="password" id="lastfm-api-key" placeholder="Enter API Key" class="meta-inp" autocomplete="off">
-        </div>
-        <div>
-          <label for="lastfm-shared-secret" style="font-size:11px;color:var(--text-subdued);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;">Shared Secret</label>
-          <input type="password" id="lastfm-shared-secret" placeholder="Enter Shared Secret" class="meta-inp" autocomplete="off">
-        </div>
-        <p style="font-size:10px;color:var(--text-disabled);margin-top:8px;">
-          Don't have these? <button type="button" class="text-link" id="lastfm-api-link">Create Last.fm API credentials</button>
-        </p>
-      </div>
-
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <button class="btn btn-primary" id="btn-lastfm-open-browser" style="justify-content:center;">
-          <i class="ph ph-browser"></i> 1. Open Browser to Authorize
-        </button>
-        <button class="btn btn-outline" id="btn-lastfm-confirm" style="justify-content:center;" disabled>
-          <i class="ph ph-check-circle"></i> 2. I have authorized
-        </button>
-        <button class="btn ghost" id="btn-lastfm-cancel" style="justify-content:center;color:var(--text-subdued);">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <div id="app-toast" class="app-toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   <div id="app-confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="app-confirm-title" aria-describedby="app-confirm-message">
     <div class="modal-content app-confirm-dialog">
@@ -1567,6 +1684,10 @@
   <script src="renderer-import-review.js"></script>
   <script src="renderer-lyrics.js"></script>
   <script src="renderer-audio-output.js"></script>
+  <script src="renderer-listenbrainz-releases.js"></script>
+  <script src="renderer-youtube-playlists.js"></script>
+  <script src="renderer-listenbrainz-playlists.js"></script>
+  <script src="renderer-listenbrainz-settings.js"></script>
   <script src="renderer-settings-ui.js"></script>
   <script src="renderer-metadata-ui.js"></script>
   <script src="renderer-playback-ui.js"></script>

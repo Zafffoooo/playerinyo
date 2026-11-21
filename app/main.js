@@ -6,14 +6,29 @@ const { spawn } = require('child_process');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { parse } = require('csv-parse');
 const { createMetadataBackfillStamp, hasCurrentMetadataBackfill } = require('./metadata-backfill');
-const { parseSpotifyAccountFile } = require('./spotify-account-playlists');
+const { parseSpotifyAccountFile, zipEntries } = require('./spotify-account-playlists');
 const { createSpotifyAccountClient } = require('./spotify-account-auth');
 const { parseM3u, setLocalRecordExistence, normalizeExportTrack, buildM3u } = require('./playlist-format');
 const { applyPathRemap, buildRelinkProposals, canonicalPath, inferRootReplacements } = require('./moved-file-relink');
+const { tmpdir } = require('node:os');
+const { Readable, Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+const { createListenbrainzRadio } = require('./listenbrainz-radio');
+const { createDeezerClient } = require('./deezer-client');
+const { createProviderJsonCache } = require('./provider-json-cache');
+const { createMusicRecommendations } = require('./music-recommendations');
+const { createListenbrainzOutbox } = require('./listenbrainz-outbox');
+const {
+  playlistIdFromUrl, playlistUrl, youtubeTrackRecord, decodePlaylistResult, createPlaylistLinkTracker,
+} = require('./youtube-playlist-links');
+const { readArchiveInput, makeArchiveVersion } = require('./youtube-playlist-archive');
+const { inspectFreshReleases, loadFreshReleases } = require('./listenbrainz-releases');
+const { normalizeCreatedPlaylists, normalizeCreatedPlaylist } = require('./listenbrainz-playlists');
+const { createListenBrainzClient } = require('./listenbrainz-client');
 const { createLastfmApiClient, restoreCacheEntries } = require('./lastfm-client');
-const { enrichCanonicalDownloadMetadata, getLastfmTrackInfoParams, stripYoutubeTopicSuffix } = require('./download-canonical-metadata');
+const { lookupCanonicalDownloadMetadata, enrichCanonicalDownloadMetadata, getLastfmTrackInfoParams, stripYoutubeTopicSuffix } = require('./download-canonical-metadata');
 const { buildCandidatePools, selectDiscoveryBatch, flattenPools, getCandidateIdentity, getCandidateAliasIdentity, normalizeGenreKey, normalizeText, hasGenreTag, candidateFromTrack } = require('./lastfm-discovery');
-const { createKnownTrackIndex, seedFromHistory, indexTrack, hasKnownTrack, beginLastfmSync, ingestLastfmRecentPage, getLastfmRecentTracksRequest, MAX_SERIALIZED_BYTES, serializeKnownTrackIndex } = require('./known-track-index');
+const { selectListenbrainzAccount, beginListenbrainzWindow, ingestListenbrainzPage, indexListenbrainzListen, createKnownTrackIndex, seedFromHistory, indexTrack, hasKnownTrack, beginLastfmSync, ingestLastfmRecentPage, getLastfmRecentTracksRequest, MAX_SERIALIZED_BYTES, serializeKnownTrackIndex } = require('./known-track-index');
 const { createPendingWriteDrainer } = require('./pending-write-drainer');
 const { createCoalescedWrite } = require('./coalesced-write');
 const { createMainWorkerClient, createSharedWorkerClient, runMainWorkerTask } = require('./main-worker-client');
@@ -22,7 +37,7 @@ const { writeTextFileAtomic, MAX_METADATA_EDIT_BYTES, MAX_DOWNLOADED_AUDIO_BYTES
 const { createBackupRetentionCache } = require('./backup-retention-cache');
 const {
   MAX_BACKUP_BYTES, MAX_BACKUP_VALUES, MAX_LIBRARY_TRACKS, MAX_PLAYLIST_TRACKS, SENSITIVE_SETTING_KEYS,
-  sanitizeSettingsForBackup, summarizeBackupData, validateBackupJsonShape, validateBackupLibrary,
+  sanitizeSettingsForBackup, summarizeBackupData, validateYouTubeArchive, validateBackupJsonShape, validateBackupLibrary,
   validateBackupPlaylistTrack, validateBackupPlaylists, validateBackupMappings, validateBackupContainers, validateBackupData,
 } = require('./backup-validation');
 const { createLastfmSyncGuard } = require('./lastfm-sync-guard');
@@ -655,11 +670,11 @@ async function recoverInterruptedDataTransaction() {
     const legacyTargets = [LIBRARY_FILE, PLAYLISTS_FILE, MAPPINGS_FILE, SETTINGS_FILE];
     const currentTargets = [...legacyTargets, LIKED_SONGS_FILE];
     const currentTargetsWithListeningStats = [...currentTargets, LISTENING_STATS_FILE];
-    const allowedTargets = new Set(currentTargetsWithListeningStats);
+    const allowedTargets = new Set([...currentTargetsWithListeningStats, youtubeArchiveFile, youtubeLinkFile]);
     const recordTargets = new Set(records.map(record => record && record.target));
     const hasExactTargets = (targets) => recordTargets.size === targets.length && targets.every(target => recordTargets.has(target));
     const userDataDir = app.getPath('userData');
-    const valid = ((records.length === 4 && hasExactTargets(legacyTargets)) || (records.length === 5 && hasExactTargets(currentTargets)) || (records.length === 6 && hasExactTargets(currentTargetsWithListeningStats)))
+    const valid = ((records.length === 4 && hasExactTargets(legacyTargets)) || (records.length === 5 && hasExactTargets(currentTargets)) || (records.length >= 6 && records.length <= 8 && records.length === recordTargets.size && currentTargetsWithListeningStats.every(target => recordTargets.has(target))))
       && records.every(record => record
       && typeof record.target === 'string'
       && typeof record.staged === 'string'
@@ -731,6 +746,8 @@ function validateAppStateSnapshot(snapshot) {
     mappings: snapshot.mappings,
     settings: snapshot.settings,
     likedSongs: snapshot.likedSongs,
+    ...(snapshot.youtubeArchive !== undefined && { youtubeArchive: snapshot.youtubeArchive }),
+    ...(snapshot.youtubeLinks !== undefined && { youtubeLinks: snapshot.youtubeLinks }),
   };
   validateBackupJsonShape(data, 0, { remaining: MAX_BACKUP_VALUES });
   validateBackupContainers(data, true);
@@ -1057,6 +1074,10 @@ app.whenReady().then(async () => {
   }
   lastfmDebug('startup-paths', { userDataPath: app.getPath('userData'), settingsPath: SETTINGS_FILE, encryptionAvailable: safeStorage.isEncryptionAvailable(), safeStorageBackend: typeof safeStorage.getSelectedStorageBackend === 'function' ? safeStorage.getSelectedStorageBackend() : '', secureStorageAvailable: isSecureStorageAvailable() });
   loadSettingsFromDisk();
+  fs.promises.rm(path.join(app.getPath('userData'), 'youtube-playlist-snapshots.json'), { force: true })
+    .catch(error => console.warn('Could not clear retired YouTube account cache:', error.message));
+  try { youtubeLinkTracker.start(); }
+  catch (error) { console.warn('Could not load followed YouTube links:', error.message); }
   const startupDownloadRoot = normalizePathInput(appSettings.ytdlDownloadFolder || '');
   if (startupDownloadRoot && path.isAbsolute(startupDownloadRoot)) {
     cleanupStaleDownloadArtifacts(startupDownloadRoot).catch((error) => console.warn('Could not clean stale download artifacts:', error.message || error));
@@ -1605,15 +1626,33 @@ registerIpcHandler('cancel-playlist-url-import', (event, rawId) => {
   if (child) { try { child.kill('SIGTERM'); } catch (_) { /* Already finished. */ } }
   return true;
 });
-registerIpcHandler('import-playlist-url', async (event, rawUrl, rawId) => {
+async function readYouTubePlaylistLink(playlistId, processKey, progress = () => {}) {
+  let progressText = '';
+  const result = await runProcess('yt-dlp', [
+    '--ignore-config', '--flat-playlist', '--dump-single-json', '--skip-download',
+    '--playlist-end', '2001', playlistUrl(playlistId),
+  ], {
+    timeoutMs: 120000, processKey, maxOutputChars: 8 * 1024 * 1024,
+    onStderr(chunk) {
+      progressText = (progressText + chunk).slice(-512);
+      const matches = [...progressText.matchAll(/Downloading item (\d+) of (\d+)/g)];
+      const match = matches.at(-1);
+      if (match) progress('Reading tracks…', Number(match[1]), Number(match[2]));
+    }
+  });
+  return decodePlaylistResult(result, playlistId);
+}
+
+registerIpcHandler('import-playlist-url', async (event, rawUrl, rawId, provider) => {
   const id = String(rawId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
   if (!id || playlistUrlImportRequests.has(id)) return { ok: false, error: 'Invalid import request.' };
   let url;
   try { url = new URL(String(rawUrl || '').trim()); } catch (_) { return { ok: false, error: 'Enter a valid playlist URL.' }; }
   if (url.protocol !== 'https:' || url.username || url.password || url.port || String(rawUrl).length > 2048) return { ok: false, error: 'Only HTTPS playlist links are supported.' };
   const spotifyMatch = url.hostname === 'open.spotify.com' && /^\/(?:embed\/)?playlist\/([A-Za-z0-9]{22})\/?$/.exec(url.pathname);
-  const youtube = url.hostname === 'music.youtube.com' && url.pathname === '/playlist' && /^[A-Za-z0-9_-]{10,80}$/.test(url.searchParams.get('list') || '');
-  if (!spotifyMatch && !youtube) return { ok: false, error: 'Use a public Spotify or YouTube Music playlist link.' };
+  const youtube = playlistIdFromUrl(url);
+  if (provider === 'youtube' && !youtube) return { ok: false, error: 'Enter a valid YouTube Music playlist link.' };
+  if (!spotifyMatch && !youtube) return { ok: false, error: 'Use a Spotify or YouTube Music playlist link.' };
   playlistUrlImportRequests.add(id);
   const progress = (message, done, total) => { try { event.sender.send('playlist-url-import-progress', { requestId: id, message, done, total }); } catch (_) { /* The window may have closed. */ } };
   try {
@@ -1650,28 +1689,20 @@ registerIpcHandler('import-playlist-url', async (event, rawUrl, rawId) => {
         return { ok: true, format: 'url', sourcePath: embedUrl, name: String(entity.name || 'Spotify Playlist').slice(0, 200), coverUrl: entity.coverArt?.sources?.[0]?.url || '', records };
       } finally { clearTimeout(timer); }
     }
-    const playlistUrl = `https://music.youtube.com/playlist?list=${encodeURIComponent(url.searchParams.get('list'))}`;
-    let progressText = '';
-    const result = await runProcess('yt-dlp', ['--ignore-config', '--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-end', '2001', playlistUrl], {
-      timeoutMs: 120000, processKey: id, maxOutputChars: 8 * 1024 * 1024,
-      onStderr(chunk) {
-        progressText = (progressText + chunk).slice(-512);
-        const matches = [...progressText.matchAll(/Downloading item (\d+) of (\d+)/g)];
-        const match = matches[matches.length - 1];
-        if (match) progress('Reading tracks…', Number(match[1]), Number(match[2]));
-      }
-    });
-    if (result.cancelled || cancelledYtdlpDownloads.has(id)) return { ok: false, cancelled: true };
-    if (!result.ok) return { ok: false, error: formatYtdlpError(result.stderr || result.stdout, result.timedOut ? 'Playlist import timed out.' : 'Could not read this playlist.') };
-    let data;
-    try { data = JSON.parse(result.stdout); } catch (_) { return { ok: false, error: 'Playlist response was incomplete.' }; }
-    const entries = Array.isArray(data.entries) ? data.entries : [];
-    if (!entries.length) return { ok: false, error: 'This playlist is empty, private, or unavailable.' };
-    if (entries.length > 2000 || (Number(data.playlist_count) > entries.length) || entries.some(item => !item || !item.title)) return { ok: false, error: 'The complete playlist could not be read. Nothing was imported.' };
-    const records = entries.map(item => ({ Song: String(item.title).slice(0, 300), Artist: String(item.artist || item.uploader || '').slice(0, 200), Album: '', VideoId: /^[A-Za-z0-9_-]{11}$/.test(item.id || '') ? item.id : '', SourceUrl: item.url || '', SourceFormat: 'url' }));
+    const result = await readYouTubePlaylistLink(youtube, id, progress);
+    if (cancelledYtdlpDownloads.has(id)) return { ok: false, cancelled: true };
+    if (!result.ok) return result;
+    youtubeLinkReads.delete(youtube);
+    youtubeLinkReads.set(youtube, { result, readAt: Date.now() });
+    if (youtubeLinkReads.size > 16) youtubeLinkReads.delete(youtubeLinkReads.keys().next().value);
+    const records = result.tracks.filter(row => !row.unavailable).map(youtubeTrackRecord);
+    let canFollowYouTube = true;
+    try { canFollowYouTube = !youtubeLinkTracker.get(youtube)?.following; }
+    catch (error) { console.warn('Could not read followed YouTube links:', error.message); }
     progress('Ready for review', records.length, records.length);
-    const coverUrl = Array.isArray(data.thumbnails) ? String(data.thumbnails[data.thumbnails.length - 1]?.url || '') : '';
-    return { ok: true, format: 'url', sourcePath: playlistUrl, name: String(data.title || 'YouTube Music Playlist').slice(0, 200), coverUrl: /^https:\/\//.test(coverUrl) ? coverUrl.slice(0, 4096) : '', records };
+    return { ok: true, format: 'url', sourcePath: playlistUrl(youtube), name: result.name,
+      coverUrl: result.coverUrl, records, youtubePlaylistId: youtube, canFollowYouTube,
+      unavailableCount: result.tracks.length - records.length };
   } catch (error) { return { ok: false, error: error.name === 'AbortError' ? 'Playlist request timed out.' : (error.message || 'Playlist import failed.') }; }
   finally { playlistUrlImportRequests.delete(id); cancelledYtdlpDownloads.delete(id); }
 });
@@ -2077,7 +2108,9 @@ const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 configureDiscordCoverCache(path.join(app.getPath('userData'), 'discord-cover-cache.json'));
 const LISTENING_STATS_FILE = path.join(app.getPath('userData'), 'listening-stats.json');
 const LIKED_SONGS_FILE = path.join(app.getPath('userData'), 'liked-songs.json');
-const backupSourceFiles = new Set([LIBRARY_FILE, PLAYLISTS_FILE, MAPPINGS_FILE, SETTINGS_FILE, LISTENING_STATS_FILE, LIKED_SONGS_FILE]);
+const youtubeArchiveFile = path.join(app.getPath('userData'), 'youtube-playlist-archive.json');
+const youtubeLinkFile = path.join(app.getPath('userData'), 'youtube-playlist-links.json');
+const backupSourceFiles = new Set([LIBRARY_FILE, PLAYLISTS_FILE, MAPPINGS_FILE, SETTINGS_FILE, LISTENING_STATS_FILE, LIKED_SONGS_FILE, youtubeArchiveFile, youtubeLinkFile]);
 const RESTORE_MANIFEST_FILE = path.join(app.getPath('userData'), '.backup-restore-transaction.json');
 const COVERS_DIR = path.join(app.getPath('userData'), 'covers');
 const BACKUPS_DIR = path.join(app.getPath('userData'), 'backups');
@@ -2191,7 +2224,7 @@ let lastfmDiscoveryCacheLoaded = false;
 const lastfmDiscoveryCache = new Map();
 const lastfmApiCache = new Map();
 const lastfmApiClient = createLastfmApiClient({
-  getApiKey: () => appSettings.lastfmApiKey || '',
+  getApiKey: () => appSettings.lastfmProEnabled === true ? appSettings.lastfmApiKey || '' : '',
   cache: lastfmApiCache,
 });
 
@@ -2372,6 +2405,10 @@ async function getLastfmPool(poolKey, genreId) {
 async function makeLastfmDiscoveryBatch(session, genreId, options) {
   const normalized = normalizeLastfmProviderSession(session, [genreId]);
   const poolResult = normalized ? await getLastfmPool(normalized.poolKey, normalized.genreIds[0]) : await buildLastfmDiscoveryPools(genreId);
+  return selectGenreDiscoveryBatch(normalized, genreId, options, poolResult);
+}
+
+async function selectGenreDiscoveryBatch(normalized, genreId, options, poolResult) {
   const baseSession = normalized || { version: 1, genreIds: [normalizeGenreKey(genreId)], mode: 'balanced', excludeKnownTracks: !!(options && options.excludeKnownTracks), poolKey: poolResult.poolKey, remainingItemIds: [], recentItemIds: [], lastArtistKey: '' };
   const index = await ensureKnownTrackIndex();
   const allItems = flattenPools(poolResult.pools);
@@ -2439,7 +2476,7 @@ async function getLastfmSimilarityCandidateIds(seed, genreId) {
 }
 
 function scheduleLastfmKnownTrackSync() {
-  if (lastfmKnownSyncTimer || lastfmKnownSyncPromise || !appSettings.lastfmApiKey || !appSettings.lastfmUsername) return;
+  if (appSettings.lastfmProEnabled !== true || lastfmKnownSyncTimer || lastfmKnownSyncPromise || !appSettings.lastfmApiKey || !appSettings.lastfmUsername) return;
   lastfmKnownSyncTimer = setTimeout(() => {
     lastfmKnownSyncTimer = null;
     runLastfmKnownTrackSync().catch((error) => console.warn('Last.fm known-track sync failed:', error.message || error));
@@ -2453,10 +2490,11 @@ function invalidateLastfmKnownTrackSync() {
 }
 
 function isCurrentLastfmKnownSync(token) {
-  return lastfmKnownSyncGuard.isCurrent(token, appSettings.lastfmUsername, appSettings.lastfmApiKey);
+  return appSettings.lastfmProEnabled === true && lastfmKnownSyncGuard.isCurrent(token, appSettings.lastfmUsername, appSettings.lastfmApiKey);
 }
 
 async function runLastfmKnownTrackSync() {
+  if (appSettings.lastfmProEnabled !== true) return { started: false, complete: false };
   if (lastfmKnownSyncPromise) return lastfmKnownSyncPromise;
   let runToken = null;
   lastfmKnownSyncPromise = (async () => {
@@ -2614,7 +2652,7 @@ async function createValidatedBackup(kind, extras, filePath) {
   const worker = createMainWorkerClient();
   try {
     const built = await backupSourceLock.run(() => worker.request('buildBackup', {
-      paths: { settings: SETTINGS_FILE, listeningStats: LISTENING_STATS_FILE, library: LIBRARY_FILE, playlists: PLAYLISTS_FILE, mappings: MAPPINGS_FILE, likedSongs: LIKED_SONGS_FILE },
+      paths: { settings: SETTINGS_FILE, listeningStats: LISTENING_STATS_FILE, library: LIBRARY_FILE, playlists: PLAYLISTS_FILE, mappings: MAPPINGS_FILE, likedSongs: LIKED_SONGS_FILE, youtubeArchive: youtubeArchiveFile, youtubeLinks: youtubeLinkFile },
       settings: sanitizeSettingsForBackup(appSettings),
       fallbackLikedSongs: extras && Array.isArray(extras.likedSongs) ? extras.likedSongs : [],
       kind,
@@ -2794,7 +2832,7 @@ function scheduleAutomaticBackup(minimumDelayMs = 0) {
 }
 
 function setAutomaticBackupLibraryReady(hasLibrary, initialDelay = AUTOMATIC_BACKUP_INITIAL_DELAY_MS) {
-  automaticBackupLibraryReady = hasLibrary === true;
+  automaticBackupLibraryReady = hasLibrary === true || fs.existsSync(youtubeArchiveFile) || fs.existsSync(youtubeLinkFile);
   if (!automaticBackupLibraryReady) cancelAutomaticBackupSchedule();
   else scheduleAutomaticBackup(initialDelay);
 }
@@ -3007,15 +3045,15 @@ async function resolveCanonicalDownloadMetadata(meta) {
   // Album-context jobs already carry their canonical release metadata. Keeping
   // this early return also makes bulk album downloads network-independent.
   if (canonical.album) return canonical;
-  const params = getLastfmTrackInfoParams(canonical);
   try {
-    const response = await lastfmApiClient.request('track.getinfo', params);
-    return enrichCanonicalDownloadMetadata(canonical, response).meta;
-  } catch (error) {
-    // Metadata enrichment must never turn an otherwise valid local download
-    // into a network-dependent operation. The path helper keeps its Singles
-    // fallback when no verified album can be resolved.
-    console.warn('Could not enrich download metadata from Last.fm:', error && error.message ? error.message : error);
+    const enriched = await lookupCanonicalDownloadMetadata(canonical, {
+      musicbrainz: endpoint => recommendationMusicBrainz(endpoint, value => value),
+      listenbrainz: endpoint => recommendationListenBrainz(endpoint, value => value),
+    });
+    if (enriched.album || appSettings.lastfmProEnabled !== true || !appSettings.lastfmApiKey) return enriched;
+    const response = await lastfmApiClient.request('track.getinfo', getLastfmTrackInfoParams(enriched)).catch(() => null);
+    return enrichCanonicalDownloadMetadata(enriched, response).meta;
+  } catch {
     return canonical;
   }
 }
@@ -3605,13 +3643,14 @@ function loadSettingsFromDisk() {
           throw new Error('automaticBackupsEnabled must be a boolean');
         }
       });
-      const loadedSettings = deserializeSettingsFromDisk(settings);
-      const removedSpotifyCredentials = ['spotifyClientId', 'spotifyClientSecret'].some((key) => Object.prototype.hasOwnProperty.call(loadedSettings, key));
-      for (const key of ['spotifyClientId', 'spotifyClientSecret']) {
-        delete loadedSettings[key];
+      const retiredKeys = ['spotifyClientId', 'spotifyClientSecret', 'youtubePlaylistRefreshToken', 'youtubeFollowedPlaylists'];
+      const removedRetiredSettings = retiredKeys.some(key => Object.hasOwn(settings, key));
+      for (const key of retiredKeys) {
+        delete settings[key];
         delete preservedEncryptedSettings[key];
         undecryptableSettingKeys.delete(key);
       }
+      const loadedSettings = deserializeSettingsFromDisk(settings);
       if (Object.prototype.hasOwnProperty.call(loadedSettings, 'listeningStats')) {
         legacyListeningStats = loadedSettings.listeningStats;
         delete loadedSettings.listeningStats;
@@ -3627,25 +3666,24 @@ function loadSettingsFromDisk() {
       try { loadedSettings.radioBlocklist = sanitizeRadioBlocklistForSettings(loadedSettings.radioBlocklist); }
       catch (e) { console.warn('Ignoring invalid radio blocklist in settings.json:', e.message); loadedSettings.radioBlocklist = { version: 1, tracks: [], artists: [] }; }
       appSettings = { ...appSettings, ...loadedSettings };
-      if (removedSpotifyCredentials) {
-        // Spotify metadata lookup has been retired; remove old credentials
-        // from the on-disk settings file during the next startup.
-        persistSettingsStorage(appSettings).catch((error) => console.warn('Could not remove retired Spotify settings:', error.message || error));
-      }
-      if (fs.existsSync(LISTENING_STATS_FILE)) {
+      const hasListeningStatsFile = fs.existsSync(LISTENING_STATS_FILE);
+      const migrateListeningStats = !hasListeningStatsFile && legacyListeningStats !== null;
+      if (hasListeningStatsFile) {
         const storedStats = readAppDataFile(LISTENING_STATS_FILE, {}, 'listening-stats.json', (value) => {
           if (!isPlainObject(value)) throw new Error('expected an object');
         });
         appSettings.listeningStats = sanitizeListeningStats(storedStats);
-      } else if (legacyListeningStats !== null) {
+      } else if (migrateListeningStats) {
         appSettings.listeningStats = sanitizeListeningStats(legacyListeningStats);
-        // Move the legacy embedded payload out of settings.json as soon as it
-        // is safely validated. Future playback checkpoints then avoid writing
-        // a growing settings document.
-        persistSettingsStorage(appSettings, true).catch((error) => console.warn('Could not migrate listening stats:', error.message || error));
+      }
+      if (removedRetiredSettings || migrateListeningStats) {
+        persistSettingsStorage(appSettings, migrateListeningStats)
+          .catch(error => console.warn('Could not persist settings migration:', error.message));
       }
       seedKnownTrackIndexFromSettings().catch((error) => console.warn('Could not seed known-track index:', error.message || error));
       scheduleLastfmKnownTrackSync();
+      scheduleListenbrainzSync();
+      listenbrainzOutbox.wake();
     }
     settingsLoadError = null;
     settingsLoadedFromDisk = true;
@@ -4007,6 +4045,16 @@ registerIpcHandler('import-backup', async () => {
   }
 });
 
+function youtubeBackupEntries(data) {
+  return [[youtubeArchiveFile, data.youtubeArchive], [youtubeLinkFile, data.youtubeLinks]]
+    .filter(([, rows]) => rows !== undefined).map(([filePath, rows]) => ({ filePath, data: rows }));
+}
+
+function resumeYouTubeTracking() {
+  try { youtubeLinkTracker.start(); }
+  catch (error) { console.warn('Could not resume followed links:', error.message); }
+}
+
 registerIpcHandler('restore-backup', async (event, token) => {
   token = String(token || '');
   const pending = pendingBackupImports.get(token);
@@ -4018,6 +4066,7 @@ registerIpcHandler('restore-backup', async (event, token) => {
   if (backupRestoreInProgress || movedFileRelinkCommitInProgress) return { ok: false, error: 'Another app-data maintenance operation is already running.' };
   if (reservedDownloadRequestIds.size || activeYtdlpDownloads.size) return { ok: false, error: 'Wait for active downloads to finish before restoring a backup.' };
   backupRestoreInProgress = true;
+  youtubeLinkTracker.close();
   try {
     const data = pending.data;
     let safetyWarning = '';
@@ -4031,8 +4080,15 @@ registerIpcHandler('restore-backup', async (event, token) => {
     for (const key of SENSITIVE_SETTING_KEYS) {
       if (appSettings[key]) restoredSettings[key] = appSettings[key];
     }
+    if (restoredSettings.listenbrainzToken) restoredSettings.listenbrainzUsername = appSettings.listenbrainzUsername;
     const restoredLikedSongs = Array.isArray(data.likedSongs) ? data.likedSongs : readJsonFile(LIKED_SONGS_FILE, []);
     await waitForPendingDataWrites();
+    const previousYouTube = {
+      ...(data.youtubeArchive !== undefined && { youtubeArchive: readYouTubeArchive() }),
+      ...(data.youtubeLinks !== undefined && {
+        youtubeLinks: readAppDataFile(youtubeLinkFile, [], 'youtube-playlist-links.json', rows => validateYouTubeArchive(rows, true)),
+      }),
+    };
     const restoredStorage = splitSettingsForStorage(restoredSettings);
     await replaceJsonFilesTransaction([
       { filePath: LIBRARY_FILE, data: data.library },
@@ -4041,17 +4097,21 @@ registerIpcHandler('restore-backup', async (event, token) => {
       { filePath: SETTINGS_FILE, data: restoredStorage.settingsSnapshot },
       { filePath: LISTENING_STATS_FILE, data: restoredStorage.listeningStats },
       { filePath: LIKED_SONGS_FILE, data: restoredLikedSongs },
+      ...youtubeBackupEntries(data),
     ]);
+    if (data.youtubeLinks !== undefined) youtubeLinkTracker.reload();
+    youtubeLinkReads.clear();
     invalidateManagedLibraryAudioPaths();
     appSettings = restoredSettings;
     setAutomaticBackupLibraryReady(data.library.length > 0);
     const warnings = await reconcileRestoredRuntime(restoredSettings);
     if (safetyWarning) warnings.unshift(safetyWarning);
-    return { ok: true, summary: summarizeBackupData(data), likedSongs: restoredLikedSongs, warnings };
+    return { ok: true, summary: summarizeBackupData(data), likedSongs: restoredLikedSongs, previousYouTube, warnings };
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
   } finally {
     backupRestoreInProgress = false;
+    resumeYouTubeTracking();
   }
 });
 
@@ -4063,6 +4123,7 @@ registerIpcHandler('restore-app-state', async (event, snapshot) => {
   if (backupRestoreInProgress || movedFileRelinkCommitInProgress) return { ok: false, error: 'Another app-data maintenance operation is already running.' };
   if (reservedDownloadRequestIds.size || activeYtdlpDownloads.size) return { ok: false, error: 'Wait for active downloads to finish before undoing a backup restore.' };
   backupRestoreInProgress = true;
+  youtubeLinkTracker.close();
   try {
     const data = validateAppStateSnapshot(snapshot);
     try { await createSafetyBackup(); }
@@ -4077,7 +4138,10 @@ registerIpcHandler('restore-app-state', async (event, snapshot) => {
       { filePath: SETTINGS_FILE, data: restoredStorage.settingsSnapshot },
       { filePath: LISTENING_STATS_FILE, data: restoredStorage.listeningStats },
       { filePath: LIKED_SONGS_FILE, data: data.likedSongs },
+      ...youtubeBackupEntries(data),
     ]);
+    if (data.youtubeLinks !== undefined) youtubeLinkTracker.reload();
+    youtubeLinkReads.clear();
     invalidateManagedLibraryAudioPaths();
     appSettings = restoredSettings;
     setAutomaticBackupLibraryReady(data.library.length > 0);
@@ -4086,6 +4150,7 @@ registerIpcHandler('restore-app-state', async (event, snapshot) => {
     return { ok: false, error: e.message || String(e) };
   } finally {
     backupRestoreInProgress = false;
+    resumeYouTubeTracking();
   }
 });
 
@@ -4500,8 +4565,9 @@ registerIpcHandler('load-settings', () => {
   if (appSettings && appSettings.discordRpc) {
     reconcileDiscordRuntime(true);
   }
-  const rendererSettings = { ...redactLastfmCredentials(appSettings), lastfmConnected: !!appSettings.lastfmSessionKey };
+  const rendererSettings = { ...redactLastfmCredentials(appSettings), lastfmConnected: appSettings.lastfmProEnabled === true && !!appSettings.lastfmSessionKey, listenbrainzConnected: !!appSettings.listenbrainzToken };
   delete rendererSettings.listeningStats;
+  delete rendererSettings.listenbrainzToken;
   return rendererSettings;
 });
 
@@ -4528,6 +4594,7 @@ registerIpcHandler('save-listening-stats', async (event, listeningStats) => {
 registerIpcHandler('save-settings', async (event, settings) => {
   if (backupRestoreInProgress || movedFileRelinkCommitInProgress || !settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
   try {
+    const wasLastfmEnabled = appSettings.lastfmProEnabled === true;
     const wasDiscord = appSettings.discordRpc;
     const previousDiscordApplicationId = appSettings.discordApplicationId || '';
     const wasAutomaticBackupsEnabled = appSettings.automaticBackupsEnabled === true;
@@ -4536,6 +4603,12 @@ registerIpcHandler('save-settings', async (event, settings) => {
     // main-only Last.fm credentials from the authoritative main state.
     const beforeMergeSnapshot = serializeSettingsForDisk(appSettings);
     const validatedSettings = { automaticBackupsEnabled: true, ...mergeRendererSettings(appSettings, settings) };
+    for (const key of ['listenbrainzToken', 'listenbrainzUsername']) {
+      validatedSettings[key] = appSettings[key];
+    }
+    delete validatedSettings.listenbrainzConnected;
+    delete validatedSettings.youtubePlaylistRefreshToken;
+    delete validatedSettings.youtubeFollowedPlaylists;
     if (Object.prototype.hasOwnProperty.call(validatedSettings, 'playbackSession')) {
       validatedSettings.playbackSession = sanitizePlaybackSession(validatedSettings.playbackSession);
     }
@@ -4546,7 +4619,14 @@ registerIpcHandler('save-settings', async (event, settings) => {
     lastfmDebug('renderer-save-completed', { disk: lastfmEncryptedFieldPresence(readAppDataFile(SETTINGS_FILE, {}, 'settings.json')), settingsPath: SETTINGS_FILE });
     // Playback can update its separate stats file while settings are being written.
     // Keep that newer in-memory snapshot when the settings write completes.
-    appSettings = { ...validatedSettings, listeningStats: appSettings.listeningStats };
+    appSettings = { ...validatedSettings, listenbrainzToken: appSettings.listenbrainzToken, listenbrainzUsername: appSettings.listenbrainzUsername, listeningStats: appSettings.listeningStats };
+    if (wasLastfmEnabled !== (appSettings.lastfmProEnabled === true)) {
+      if (appSettings.lastfmProEnabled === true) scheduleLastfmKnownTrackSync();
+      else {
+        pendingLastfmAuthToken = '';
+        invalidateLastfmKnownTrackSync();
+      }
+    }
     if (validatedSettings.automaticBackupsEnabled !== wasAutomaticBackupsEnabled) {
       if (validatedSettings.automaticBackupsEnabled) scheduleAutomaticBackup();
       else cancelAutomaticBackupSchedule();
@@ -5010,6 +5090,7 @@ async function fetchMetadataJson(url, options) {
   try {
     const response = await fetch(url, { ...(options || {}), signal: controller.signal });
     if (!response.ok) throw new Error(`Metadata API HTTP ${response.status}`);
+    if (response.status === 204) return null;
     const declaredLength = Number(response.headers.get('content-length')) || 0;
     if (declaredLength > MAX_METADATA_API_RESPONSE_BYTES) throw new Error('Metadata API response exceeds the 2 MB limit');
     const text = await response.text();
@@ -5134,7 +5215,211 @@ registerIpcHandler('get-metadata-release', async (event, source, id, options) =>
   }
 });
 
+async function fetchListenbrainzArchive(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('application/zip')) {
+    throw new Error('ListenBrainz archive unavailable.');
+  }
+  const directory = await fs.promises.mkdtemp(path.join(tmpdir(), 'playerinyo-listens-'));
+  const file = path.join(directory, 'history.zip');
+  let bytes = 0;
+  try {
+    const limit = new Transform({
+      transform(chunk, encoding, callback) {
+        bytes += chunk.length;
+        if (bytes > 64 * 1024 * 1024) return callback(new Error('ListenBrainz archive exceeds 64 MB.'));
+        callback(null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(response.body), limit, fs.createWriteStream(file, { mode: 0o600 }));
+    return await fs.promises.readFile(file);
+  } finally {
+    await fs.promises.unlink(file).catch(() => {});
+    await fs.promises.rmdir(directory).catch(() => {});
+  }
+}
+
+const listenbrainzClient = createListenBrainzClient({
+  fetchArchive: fetchListenbrainzArchive,
+  fetchJson: async (url, options) => {
+    const response = await fetch(url, { ...options, headers: { ...options.headers, 'User-Agent': APP_USER_AGENT } });
+    if (!response.ok) {
+      const error = new Error('ListenBrainz request failed');
+      error.status = response.status;
+      const retryAfter = response.headers.get('retry-after');
+      const resetIn = Number(response.headers.get('x-ratelimit-reset-in')) * 1000;
+      const retryDelay = retryAfter && (Number.isFinite(Number(retryAfter))
+        ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now());
+      error.retryAfterMs = Math.max(0, resetIn || 0, retryDelay || 0);
+      throw error;
+    }
+    return response.json();
+  },
+});
+const listenbrainzOutboxFile = path.join(app.getPath('userData'), 'listenbrainz-outbox.json');
+const listenbrainzOutbox = createListenbrainzOutbox({
+  load: () => readAppDataFile(listenbrainzOutboxFile, { pending: [], sent: [] }, 'listenbrainz-outbox.json'),
+  save: value => queueJsonWrite(listenbrainzOutboxFile, value),
+  account: () => {
+    const { listenbrainzUsername: username, listenbrainzToken: token } = appSettings;
+    return username && token ? { username, token } : null;
+  },
+  submit: (token, track, isCurrent) => listenbrainzClient.submit(token, track, false, isCurrent),
+});
+
+let listenbrainzConnectionGeneration = 0;
+
+let listenbrainzSyncTimer;
+let listenbrainzSyncWork;
+let listenbrainzExportWork;
+
+function currentListenbrainzAccount(username, token) {
+  return appSettings.listenbrainzUsername === username && appSettings.listenbrainzToken === token &&
+    !backupRestoreInProgress && !movedFileRelinkCommitInProgress;
+}
+
+function scheduleListenbrainzSync(delay = 0) {
+  clearTimeout(listenbrainzSyncTimer);
+  if (!appSettings.listenbrainzToken || !appSettings.listenbrainzUsername) return;
+  listenbrainzSyncTimer = setTimeout(() => {
+    if (listenbrainzSyncWork) {
+      scheduleListenbrainzSync(1000);
+      return;
+    }
+    const { listenbrainzUsername: username, listenbrainzToken: token } = appSettings;
+    listenbrainzSyncWork = (async () => {
+      const index = await ensureKnownTrackIndex();
+      if (!currentListenbrainzAccount(username, token)) return;
+      const sync = selectListenbrainzAccount(index, username);
+      beginListenbrainzWindow(sync, Math.floor(Date.now() / 1000));
+      await persistKnownTrackIndex();
+      for (let page = 0; page < 10; page++) {
+        const listens = await listenbrainzClient.recentListens(username, token, sync.cursor, 1000);
+        if (!currentListenbrainzAccount(username, token)) return;
+        const complete = ingestListenbrainzPage(index, listens, 1000);
+        await persistKnownTrackIndex();
+        if (complete) return true;
+      }
+      return false;
+    })().then(complete => {
+      if (currentListenbrainzAccount(username, token)) scheduleListenbrainzSync(complete ? 15 * 60000 : 1000);
+    }).catch(() => {
+      if (currentListenbrainzAccount(username, token)) scheduleListenbrainzSync(15 * 60000);
+    }).finally(() => { listenbrainzSyncWork = null; });
+  }, delay);
+  listenbrainzSyncTimer.unref();
+}
+
+registerIpcHandler('listenbrainz-import-history', async () => {
+  if (listenbrainzExportWork) return { status: 'waiting' };
+  const { listenbrainzUsername: username, listenbrainzToken: token } = appSettings;
+  if (!username || !token) return { status: 'failed', error: 'Connect ListenBrainz first.' };
+  listenbrainzExportWork = (async () => {
+    const index = await ensureKnownTrackIndex();
+    const isCurrent = () => currentListenbrainzAccount(username, token);
+    if (!isCurrent()) return { status: 'cancelled' };
+    const sync = selectListenbrainzAccount(index, username);
+    let job;
+    if (sync.exportId) {
+      try {
+        job = await listenbrainzClient.exportStatus(token, sync.exportId);
+      } catch (error) {
+        if (error.status !== 404) throw error;
+        if (!isCurrent()) return { status: 'cancelled' };
+        sync.exportId = 0;
+        await persistKnownTrackIndex();
+        return { status: 'failed', error: 'The saved export is unavailable. Start a new history import.' };
+      }
+    } else {
+      const jobs = await listenbrainzClient.listExports(token);
+      if (!Array.isArray(jobs)) throw new Error('Invalid export list.');
+      const fullExport = ({ start_time = null, end_time = null }) => start_time === null && end_time === null;
+      const pending = jobs.find(entry => ['waiting', 'in_progress'].includes(entry.status));
+      if (pending && !fullExport(pending)) return { status: 'waiting' };
+      job = pending || jobs.find(entry => fullExport(entry) && entry.status === 'completed' &&
+        Date.parse(entry.available_until) > Date.now() && Date.parse(entry.created) > Date.now() - 86400000);
+      if (!job && isCurrent()) job = await listenbrainzClient.createExport(token);
+    }
+    if (!isCurrent()) return { status: 'cancelled' };
+    if (!Number.isSafeInteger(job?.export_id) || job.export_id <= 0) throw new Error('Invalid export ID.');
+    sync.exportId = job.status === 'failed' ? 0 : job.export_id;
+    await persistKnownTrackIndex();
+    if (['waiting', 'in_progress'].includes(job.status)) return { status: 'waiting' };
+    if (job.status !== 'completed') return { status: 'failed', error: 'ListenBrainz could not prepare the export.' };
+    const archive = await listenbrainzClient.downloadExport(token, job.export_id);
+    if (!isCurrent()) return { status: 'cancelled' };
+    const rows = [];
+    zipEntries(archive, text => {
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        if (rows.length >= 1000000) throw new Error('ListenBrainz archive has too many listens.');
+        rows.push(JSON.parse(line));
+      }
+    }, name => /^listens\/\d{4}\/\d{2}\.jsonl$/.test(name), true);
+    rows.sort((a, b) => (b?.listened_at || 0) - (a?.listened_at || 0));
+    for (const row of rows) indexListenbrainzListen(index, row);
+    sync.exportId = 0;
+    await persistKnownTrackIndex();
+    scheduleListenbrainzSync();
+    return { status: 'completed' };
+  })().catch(() => ({ status: 'failed', error: 'Could not import ListenBrainz history.' }))
+    .finally(() => { listenbrainzExportWork = null; });
+  return listenbrainzExportWork;
+});
+
+registerIpcHandler('listenbrainz-connect', async (event, value) => {
+  const token = typeof value === 'string' ? value.trim() : '';
+  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(token)) return { ok: false, error: 'Enter a valid token.' };
+  if (!isSecureStorageAvailable()) return { ok: false, error: 'Secure storage is unavailable.' };
+  const generation = ++listenbrainzConnectionGeneration;
+  try {
+    const username = await listenbrainzClient.validateToken(token);
+    if (!username) return { ok: false, error: 'Token rejected by ListenBrainz.' };
+    if (generation !== listenbrainzConnectionGeneration || backupRestoreInProgress || movedFileRelinkCommitInProgress) return { ok: false };
+    appSettings.listenbrainzToken = token;
+    appSettings.listenbrainzUsername = username;
+    await queueJsonWrite(SETTINGS_FILE, splitSettingsForStorage(appSettings).settingsSnapshot);
+    const index = await ensureKnownTrackIndex();
+    if (!currentListenbrainzAccount(username, token)) return { ok: false };
+    selectListenbrainzAccount(index, username);
+    await persistKnownTrackIndex();
+    scheduleListenbrainzSync();
+    listenbrainzOutbox.wake(true);
+    return { ok: true, username };
+  } catch {
+    return { ok: false, error: 'Could not connect to ListenBrainz.' };
+  }
+});
+
+registerIpcHandler('listenbrainz-disconnect', async () => {
+  if (backupRestoreInProgress || movedFileRelinkCommitInProgress) return false;
+  ++listenbrainzConnectionGeneration;
+  clearTimeout(listenbrainzSyncTimer);
+  delete appSettings.listenbrainzToken;
+  delete appSettings.listenbrainzUsername;
+  delete preservedEncryptedSettings.listenbrainzToken;
+  undecryptableSettingKeys.delete('listenbrainzToken');
+  await queueJsonWrite(SETTINGS_FILE, splitSettingsForStorage(appSettings).settingsSnapshot);
+  return true;
+});
+
+async function submitListenbrainzPlayback(track, playingNow) {
+  const token = appSettings.listenbrainzToken;
+  if (!token) return false;
+  try { return await listenbrainzClient.submit(token, track, playingNow); }
+  catch { return false; }
+}
+
+registerIpcHandler('listenbrainz-now-playing', (event, track) => submitListenbrainzPlayback(track, true));
+registerIpcHandler('listenbrainz-scrobble', async (event, track) => {
+  try { return await listenbrainzOutbox.enqueue(track); }
+  catch { return false; }
+});
+registerIpcHandler('listenbrainz-outbox-status', () => listenbrainzOutbox.status());
+registerIpcHandler('listenbrainz-outbox-retry', () => listenbrainzOutbox.retry());
+
 registerIpcHandler('lastfm-get-auth-url', async (event, credentials) => {
+  if (appSettings.lastfmProEnabled !== true) return false;
   const key = String(credentials && credentials.apiKey || '').trim();
   const secret = String(credentials && credentials.sharedSecret || '').trim();
   if (!key || !secret) return false;
@@ -5159,6 +5444,7 @@ registerIpcHandler('lastfm-get-auth-url', async (event, credentials) => {
 });
 
 registerIpcHandler('lastfm-get-session', async () => {
+  if (appSettings.lastfmProEnabled !== true) return null;
   const key = String(appSettings.lastfmApiKey || '').trim();
   const secret = String(appSettings.lastfmSharedSecret || '').trim();
   const token = pendingLastfmAuthToken;
@@ -5191,6 +5477,7 @@ registerIpcHandler('lastfm-disconnect', async () => {
 });
 
 registerIpcHandler('lastfm-update-now-playing', async (event, artist, track) => {
+  if (appSettings.lastfmProEnabled !== true || appSettings.lastfmScrobbleEnabled !== true) return false;
   const key = String(appSettings.lastfmApiKey || '').trim();
   const secret = String(appSettings.lastfmSharedSecret || '').trim();
   const sessionKey = String(appSettings.lastfmSessionKey || '').trim();
@@ -5254,6 +5541,7 @@ registerIpcListener('update-thumbar', (event, isPlaying) => {
 
 
 registerIpcHandler('lastfm-scrobble', async (event, artist, track, timestamp) => {
+  if (appSettings.lastfmProEnabled !== true || appSettings.lastfmScrobbleEnabled !== true) return false;
   const key = String(appSettings.lastfmApiKey || '').trim();
   const secret = String(appSettings.lastfmSharedSecret || '').trim();
   const sessionKey = String(appSettings.lastfmSessionKey || '').trim();
@@ -5273,7 +5561,198 @@ registerIpcHandler('lastfm-scrobble', async (event, artist, track, timestamp) =>
   } catch (e) { return false; }
 });
 
+const deezerClient = createDeezerClient({ fetchJson: fetchMetadataJson });
+const recommendationMusicBrainz = createProviderJsonCache(endpoint => fetchArtistCatalogJson('https://musicbrainz.org/ws/2/' + endpoint));
+const recommendationLabs = createProviderJsonCache(endpoint =>
+  fetchMetadataJson('https://labs.api.listenbrainz.org/' + endpoint, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } }));
+const recommendationListenBrainz = createProviderJsonCache(endpoint =>
+  fetchMetadataJson('https://api.listenbrainz.org/1/' + endpoint, { headers: { 'User-Agent': ARTIST_CATALOG_USER_AGENT } }));
+const musicRecommendations = createMusicRecommendations({
+  deezer: deezerClient,
+  musicbrainz: endpoint => recommendationMusicBrainz(endpoint, value => value),
+  labs: endpoint => recommendationLabs(endpoint, value => {
+    if (!Array.isArray(value)) throw new Error('Invalid ListenBrainz Labs response.');
+    return value;
+  }),
+  listenbrainz: endpoint => recommendationListenBrainz(endpoint, value => value, endpoint.startsWith('user/') ? 120000 : 3600000),
+});
+
+const listenbrainzRadio = createListenbrainzRadio({
+  request: endpoint => recommendationListenBrainz(endpoint, value => value),
+  resolveArtist: musicRecommendations.resolveArtist,
+  similarArtists: musicRecommendations.similarArtists,
+  deezer: deezerClient,
+});
+
+async function makeListenbrainzGenreBatch(genre, session, options) {
+  if (appSettings.listenbrainzGenreRadioEnabled === false) throw new Error('ListenBrainz Genre Radio is disabled.');
+  const pools = await listenbrainzRadio.genrePools(genre);
+  return selectGenreDiscoveryBatch(session, genre, options, { poolKey: 'listenbrainz:' + genre, pools });
+}
+
+registerIpcHandler('listenbrainz-discovery-start', (event, request) => {
+  const genre = typeof request?.genreIds?.[0] === 'string' ? normalizeGenreKey(request.genreIds[0]) : '';
+  return makeListenbrainzGenreBatch(genre, null, request);
+});
+
+registerIpcHandler('listenbrainz-discovery-next', (event, value, options) => {
+  if (!Array.isArray(value?.genreIds)) throw new Error('Invalid ListenBrainz discovery session.');
+  const session = normalizeLastfmProviderSession(value);
+  if (!session || session.poolKey !== 'listenbrainz:' + session.genreIds[0]) throw new Error('Invalid ListenBrainz discovery session.');
+  session.excludeKnownTracks = options?.excludeKnownTracks === true;
+  return makeListenbrainzGenreBatch(session.genreIds[0], session, options);
+});
+
+async function getCreatedListenbrainzPlaylists(username) {
+  return recommendationListenBrainz(
+    `user/${encodeURIComponent(username)}/playlists/createdfor?count=12`, normalizeCreatedPlaylists, 300000
+  );
+}
+
+registerIpcHandler('listenbrainz-created-playlists', async () => {
+  const { listenbrainzUsername: username, listenbrainzToken: token } = appSettings;
+  if (!username || !token) return [];
+  const playlists = await getCreatedListenbrainzPlaylists(username);
+  return currentListenbrainzAccount(username, token) ? playlists : [];
+});
+
+registerIpcHandler('listenbrainz-created-playlist', async (event, id) => {
+  const { listenbrainzUsername: username, listenbrainzToken: token } = appSettings;
+  if (!username || !token || !validMusicBrainzId(id)) return null;
+  const available = await getCreatedListenbrainzPlaylists(username);
+  if (!currentListenbrainzAccount(username, token) || !available.some(row => row.id === id)) return null;
+  const result = await recommendationListenBrainz('playlist/' + id, value => normalizeCreatedPlaylist(value, id), 300000);
+  return currentListenbrainzAccount(username, token) ? result : null;
+});
+
+registerIpcHandler('listenbrainz-fresh-releases', async (_event, refresh) => {
+  const { listenbrainzUsername: username, listenbrainzToken: token } = appSettings;
+  if (!username || !token) return null;
+  return loadFreshReleases(days => recommendationListenBrainz(
+    `user/${encodeURIComponent(username)}/fresh_releases?days=${days}&past=true&future=true`,
+    inspectFreshReleases, 300000, { refresh: refresh === true }
+  ), () => currentListenbrainzAccount(username, token));
+});
+
+const youtubeLinkReads = new Map();
+let youtubeArchiveWrites = Promise.resolve();
+
+const youtubeLinkTracker = createPlaylistLinkTracker({
+  load: () => readAppDataFile(youtubeLinkFile, [], 'youtube-playlist-links.json', value => validateYouTubeArchive(value, true)),
+  canCheck: () => !backupRestoreInProgress,
+  save: async rows => {
+    await queueJsonWrite(youtubeLinkFile, rows);
+    if (rows.length && !automaticBackupLibraryReady) setAutomaticBackupLibraryReady(false);
+  },
+  read: id => readYouTubePlaylistLink(id, `youtube-follow:${id}`),
+});
+app.on('before-quit', () => youtubeLinkTracker.close());
+
+registerIpcHandler('youtube-link-list', () => youtubeLinkTracker.list());
+registerIpcHandler('youtube-link-read', (_event, id) => youtubeLinkTracker.get(id));
+registerIpcHandler('youtube-link-check', (_event, id) => youtubeLinkTracker.check(id));
+registerIpcHandler('youtube-link-stop', (_event, id) => !backupRestoreInProgress && youtubeLinkTracker.stop(id));
+registerIpcHandler('youtube-link-follow', async (_event, id) => {
+  if (backupRestoreInProgress) return false;
+  const preview = youtubeLinkReads.get(id);
+  if (!preview) return false;
+  await youtubeLinkTracker.follow(id, preview.result, preview.readAt);
+  return true;
+});
+
+function readYouTubeArchive() {
+  return readAppDataFile(youtubeArchiveFile, [], 'youtube-playlist-archive.json', value => {
+    if (!Array.isArray(value)) throw new Error('Invalid playlist archive.');
+  });
+}
+
+function saveYouTubeArchive(lists) {
+  const task = youtubeArchiveWrites.then(async () => {
+    if (backupRestoreInProgress) throw new Error('Wait for the backup restore to finish.');
+    if (!lists.length) throw new Error('No playlist tracks were found.');
+    const versions = readYouTubeArchive();
+    const existing = new Set(versions.map(row => row.id));
+    for (const list of lists) {
+      const version = makeArchiveVersion(list.name, list.tracks, versions);
+      if (!existing.has(version.id)) {
+        versions.push(version);
+        existing.add(version.id);
+      }
+    }
+    await queueJsonWrite(youtubeArchiveFile, versions);
+    if (versions.length && !automaticBackupLibraryReady) setAutomaticBackupLibraryReady(false);
+    return versions.map(({ tracks, ...version }) => ({ ...version, count: tracks.length }));
+  });
+  youtubeArchiveWrites = task.catch(() => {});
+  return task;
+}
+
+registerIpcHandler('youtube-archive-recovery', async (event, input) => {
+  const artist = typeof input === 'string' ? input.trim().toLowerCase().slice(0, 200) : '';
+  if (!artist) return [];
+  const candidates = [];
+  const add = (name, credit, source) => {
+    if (typeof name !== 'string' || !name.trim() || typeof credit !== 'string' || !credit.toLowerCase().includes(artist)) return;
+    candidates.push({ name: name.slice(0, 500), artist: credit.slice(0, 500), source });
+  };
+  for (const version of readYouTubeArchive()) for (const row of version.tracks) add(row.name, row.artist, 'Local archive');
+  for (const row of appSettings.playHistory || []) add(row.title || row.csvRecord?.Song, row.artist || row.csvRecord?.Artist, 'Playerinyo history');
+  for (const row of Object.values(appSettings.listeningStats || {})) add(row?.title, row?.artist, 'Playerinyo statistics');
+  const { listenbrainzUsername: username, listenbrainzToken: token } = appSettings;
+  if (username && token) {
+    const endpoint = 'user/' + encodeURIComponent(username) + '/listens?count=1000';
+    const response = await recommendationListenBrainz(endpoint, value => value, 300000).catch(() => null);
+    if (currentListenbrainzAccount(username, token)) {
+      for (const row of response?.payload?.listens || []) add(row.track_metadata?.track_name, row.track_metadata?.artist_name, 'ListenBrainz history');
+    }
+  }
+  const unique = new Map();
+  for (const row of candidates) {
+    const key = JSON.stringify([row.name.toLowerCase(), row.artist.toLowerCase()]);
+    if (!unique.has(key)) unique.set(key, row);
+  }
+  return [...unique.values()].slice(0, 200);
+});
+
+registerIpcHandler('youtube-archive-list', () => readYouTubeArchive().map(({ tracks, ...row }) => ({ ...row, count: tracks.length })));
+registerIpcHandler('youtube-archive-read', (event, id) => readYouTubeArchive().find(row => row.id === id) || null);
+registerIpcHandler('youtube-archive-file', async () => {
+  const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'Playlist archives', extensions: ['zip', 'csv'] }] });
+  const file = result.filePaths[0];
+  if (result.canceled || !file) return null;
+  const stat = await fs.promises.lstat(file);
+  if (!path.isAbsolute(file) || !stat.isFile() || stat.size > 64 * 1024 * 1024) throw new Error('Invalid playlist archive file.');
+  return saveYouTubeArchive(readArchiveInput(await fs.promises.readFile(file), path.basename(file)));
+});
+registerIpcHandler('youtube-archive-text', (event, name, text) => {
+  if (typeof name !== 'string' || !name.trim() || typeof text !== 'string' || Buffer.byteLength(text) > 4 * 1024 * 1024) throw new Error('Invalid playlist text.');
+  return saveYouTubeArchive(readArchiveInput(Buffer.from(text), name.trim().slice(0, 150) + '.csv'));
+});
+
+registerIpcHandler('listenbrainz-recommendation-artists', async () => {
+  const username = appSettings.listenbrainzUsername;
+  const token = appSettings.listenbrainzToken;
+  if (!username || !token) return [];
+  try {
+    const artists = await musicRecommendations.seeds(username);
+    return currentListenbrainzAccount(username, token) ? artists.map(row => row.name) : [];
+  } catch { return []; }
+});
+
+registerIpcHandler('listenbrainz-recommendations', async (event, request) => {
+  const username = appSettings.listenbrainzUsername;
+  const token = appSettings.listenbrainzToken;
+  if (!username || !token) return { items: [], error: 'Connect ListenBrainz in Settings.' };
+  try {
+    const result = await musicRecommendations.recommendations(username, request);
+    return currentListenbrainzAccount(username, token) ? result : { items: [] };
+  } catch {
+    return { items: [], error: 'ListenBrainz recommendations could not be loaded.' };
+  }
+});
+
 registerIpcHandler('lastfm-get-recent-artists', async () => {
+  if (appSettings.lastfmProEnabled !== true) return [];
   const key = String(appSettings.lastfmApiKey || '').trim();
   const username = String(appSettings.lastfmUsername || '').trim();
   if (!key || !username) return [];
@@ -5293,6 +5772,7 @@ registerIpcHandler('lastfm-get-recent-artists', async () => {
 });
 
 registerIpcHandler('lastfm-get-recommendations', async (event, request) => {
+  if (appSettings.lastfmProEnabled !== true) return { items: [], error: 'Last.fm is disabled.' };
   const key = String(appSettings.lastfmApiKey || '').trim();
   const username = String(appSettings.lastfmUsername || '').trim();
   if (!key || !username) return { items: [], error: 'Connect Last.fm to load recommendations.' };
@@ -5339,6 +5819,7 @@ registerIpcHandler('lastfm-get-recommendations', async (event, request) => {
 // normalized candidates and bounded continuation state, never credentials or
 // raw Last.fm responses.
 registerIpcHandler('lastfm-discovery-start', async (event, request) => {
+  if (appSettings.lastfmProEnabled !== true) throw new Error('Last.fm Discovery is disabled.');
   const genreIds = request && Array.isArray(request.genreIds) ? request.genreIds : [];
   const genreId = normalizeGenreKey(genreIds[0]);
   if (!genreId || genreId.length > 500) throw new Error('A valid genre is required.');
@@ -5349,6 +5830,7 @@ registerIpcHandler('lastfm-discovery-start', async (event, request) => {
 });
 
 registerIpcHandler('lastfm-discovery-next', async (event, providerSession, options) => {
+  if (appSettings.lastfmProEnabled !== true) throw new Error('Last.fm Discovery is disabled.');
   const session = normalizeLastfmProviderSession(providerSession);
   if (!session) throw new Error('Invalid Last.fm discovery session.');
   const result = await makeLastfmDiscoveryBatch(session, session.genreIds[0], options || {});
@@ -5356,7 +5838,17 @@ registerIpcHandler('lastfm-discovery-next', async (event, providerSession, optio
 });
 
 registerIpcHandler('lastfm-discovery-similarity', async (event, seed, genreId) => {
+  if (appSettings.lastfmProEnabled !== true) throw new Error('Last.fm Discovery is disabled.');
   return { candidateIds: await getLastfmSimilarityCandidateIds(seed, genreId) };
+});
+
+registerIpcHandler('listenbrainz-discovery-similarity', async (event, seed) => {
+  if (appSettings.listenbrainzGenreRadioEnabled === false) return { candidateIds: [] };
+  const artist = typeof seed?.artist === 'string' ? seed.artist.trim().slice(0, 200) : '';
+  const title = typeof seed?.title === 'string' ? seed.title.trim().slice(0, 300) : '';
+  if (!artist || !title) return { candidateIds: [] };
+  const items = await listenbrainzRadio.songCandidates({ artist, title, trackMbid: seed.trackMbid });
+  return { candidateIds: items.map(getCandidateIdentity).slice(0, 80) };
 });
 
 registerIpcHandler('song-radio:similar', async (event, seed) => {
@@ -5364,6 +5856,12 @@ registerIpcHandler('song-radio:similar', async (event, seed) => {
   const title = String(seed && seed.title || '').trim().slice(0, 300);
   if (!artist || !title) return { items: [], error: 'A song and artist are required.' };
   try {
+    if (appSettings.lastfmProEnabled !== true || !appSettings.lastfmApiKey) {
+      return { items: await listenbrainzRadio.songCandidates({
+        artist, title, trackMbid: validMusicBrainzId(seed?.trackMbid) ? seed.trackMbid : '',
+        artistMbid: validMusicBrainzId(seed?.artistMbid) ? seed.artistMbid : '',
+      }) };
+    }
     const data = await lastfmApiClient.request('track.getsimilar', { artist, track: title, limit: 100, autocorrect: 1 });
     const seen = new Set([normalizeText(artist) + '::' + normalizeText(title)]);
     const items = getLastfmSimilarTracks(data).map((row, index) => candidateFromTrack(row, { rank: index + 1, source: 'similar-track', tier: 'discovery' })).filter((candidate) => {
@@ -5400,13 +5898,19 @@ registerIpcHandler('known-track-record-play', async (event, track) => {
 });
 
 // IPC Handler: Scan Folder for Music
-registerIpcHandler('scan-folder', async (event, folderPath, existingLibrary = []) => {
+registerIpcHandler('scan-folder', async (event, folderPath, existingLibrary = [], background = false) => {
+  if (background && (!appSettings.libraryRoots?.includes(folderPath) || !appSettings.watchedLibraryRoots?.includes(folderPath))) {
+    throw new Error('Folder is no longer watched.');
+  }
+  const finish = (files, failures, total) => background
+    ? { files, partial: failures.length > 0 }
+    : finishFolderScan(event, files, failures, total);
   folderPath = normalizePathInput(folderPath);
   existingLibrary = Array.isArray(existingLibrary) ? existingLibrary : [];
   if (typeof folderPath !== 'string' || !path.isAbsolute(folderPath)) return [];
   if (!isExistingDirectory(folderPath)) {
     const preserved = existingLibrary.filter(item => item && typeof item.filePath === 'string' && isPathWithin(item.filePath, folderPath));
-    return finishFolderScan(event, preserved, [{ path: folderPath, error: 'Folder is missing or inaccessible' }], 0);
+    return finish(preserved, [{ path: folderPath, error: 'Folder is missing or inaccessible' }], 0);
   }
   const supportedExtensions = AUDIO_EXTENSIONS;
   const rawFiles = [];
@@ -5418,7 +5922,7 @@ registerIpcHandler('scan-folder', async (event, folderPath, existingLibrary = []
     failures.push({ path: folderPath, error: e.message || String(e) });
     if (e && e.code === 'AUDIO_SCAN_LIMIT') {
       const preserved = existingLibrary.filter(item => item && typeof item.filePath === 'string' && isPathWithin(item.filePath, folderPath));
-      return finishFolderScan(event, preserved, failures, rawFiles.length);
+      return finish(preserved, failures, rawFiles.length);
     }
   }
 
@@ -5433,7 +5937,7 @@ registerIpcHandler('scan-folder', async (event, folderPath, existingLibrary = []
   let nextIndex = 0;
   let completed = 0;
 
-  sendScanProgress(event, { current: 0, total: totalFiles });
+  if (!background) sendScanProgress(event, { current: 0, total: totalFiles });
 
   async function scanWorker() {
     while (true) {
@@ -5464,7 +5968,7 @@ registerIpcHandler('scan-folder', async (event, folderPath, existingLibrary = []
 
       completed++;
       if (completed % 25 === 0 || completed === totalFiles) {
-        sendScanProgress(event, { current: completed, total: totalFiles });
+        if (!background) sendScanProgress(event, { current: completed, total: totalFiles });
         await new Promise((resolve) => setImmediate(resolve));
       }
     }
@@ -5473,7 +5977,7 @@ registerIpcHandler('scan-folder', async (event, folderPath, existingLibrary = []
   const concurrency = Math.min(4, Math.max(1, totalFiles));
   await Promise.all(Array.from({ length: concurrency }, () => scanWorker()));
 
-  sendScanProgress(event, { current: totalFiles, total: totalFiles });
+  if (!background) sendScanProgress(event, { current: totalFiles, total: totalFiles });
   const scanned = musicFiles.filter(Boolean);
   if (failures.length) {
     const byPath = new Map(scanned.map(item => [item.filePath, item]));
@@ -5481,9 +5985,9 @@ registerIpcHandler('scan-folder', async (event, folderPath, existingLibrary = []
       if (!existingItem || typeof existingItem.filePath !== 'string' || byPath.has(existingItem.filePath)) continue;
       if (failures.some(failure => isPathWithin(existingItem.filePath, failure.path))) byPath.set(existingItem.filePath, existingItem);
     }
-    return finishFolderScan(event, Array.from(byPath.values()), failures, totalFiles);
+    return finish(Array.from(byPath.values()), failures, totalFiles);
   }
-  return finishFolderScan(event, scanned, [], totalFiles);
+  return finish(scanned, [], totalFiles);
 });
 
 async function parseCsvPlaylistFile(csvPath) {

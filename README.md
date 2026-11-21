@@ -19,6 +19,10 @@ Yerel müzik arşivleri için Electron tabanlı vibecoded masaüstü oynatıcı.
 - Sırayı playlist olarak kaydetme, tekrar inceleme ve sürükleme/yakınlaştırma ile kapak kırpma
 - Dinleme istatistikleri, beğeniler, yedekleme ve geri yükleme
 
+## YouTube Music hesap bağlantısı
+
+**Playlists → YouTube Music** ekranında herkese açık veya liste dışı bağlantıyı `yt-dlp` ile okuyabilir ve **Import Only** ile yerel bir çalma listesi oluşturabilirsiniz. **Follow link**, Playerinyo açıkken bağlantıyı dört saatte bir kontrol eder ve yeni veya kaldırılan parçaları arşivde gösterir. Yerel çalma listesine eklemek istediğiniz parçaları kendiniz seçebilirsiniz. Yerel arşiv Takeout ZIP, playlist CSV ve yapıştırılmış parça CSV'sini de kabul eder.
+
 ## Playlist kullanımı
 
 - Tek tıkla seçin, çift tık veya Enter ile çalın. Ctrl/Cmd+tık ile seçime ekleyin/çıkarın; Shift+tık veya Shift+↑/↓ ile aralık seçin. Ctrl/Cmd+A görünen şarkıları seçer; boş alana tıklamak veya Escape seçimi temizler.

@@ -1239,7 +1239,7 @@ function handleTrackTableDblClick(e) {
   if (track.isDisabled) { findMissingPlaylistTrack(track, true); return; }
   initAudioCtx();
   state.playQueueTracks = (trackRenderState.source || state.currentTracks).slice();
-  moveTrackToShuffleQueueStart(track);
+  restartShuffleForTrack(track);
   playTrack(track);
 }
 
@@ -1286,7 +1286,7 @@ function handleTrackTableKeyDown(e) {
     e.preventDefault();
     initAudioCtx();
     state.playQueueTracks = (trackRenderState.source || state.currentTracks).slice();
-    moveTrackToShuffleQueueStart(track);
+    restartShuffleForTrack(track);
     playTrack(track);
   } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();

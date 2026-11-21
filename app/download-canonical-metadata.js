@@ -75,4 +75,81 @@ function enrichCanonicalDownloadMetadata(meta, response) {
   return { meta: result, enriched: true, reason: 'lastfm-track-info' };
 }
 
-module.exports = { text, stripYoutubeTopicSuffix, normalizeIdentityText, sameIdentity, getLastfmTrackInfoParams, enrichCanonicalDownloadMetadata };
+const { normalizeMbid } = require('./lastfm-discovery');
+
+function creditedArtist(credits) {
+  return Array.isArray(credits) ? credits.map(credit => (credit.name || credit.artist?.name || '') + (credit.joinphrase || '')).join('') : '';
+}
+
+function recordingMatches(meta, recording) {
+  if (!recording || recording.video || !sameIdentity(meta.title, recording.title) ||
+      !sameIdentity(meta.artist, creditedArtist(recording['artist-credit']))) return false;
+  const comment = text(recording.disambiguation);
+  return !hasVersionMarker(comment) || normalizeIdentityText(meta.title).includes(normalizeIdentityText(comment));
+}
+
+function plausibleYear(value) {
+  const match = /^(19\d{2}|20\d{2})(?:-\d{2}(?:-\d{2})?)?$/.exec(String(value || ''));
+  return match && Number(match[1]) <= new Date().getUTCFullYear() ? match[1] : '';
+}
+
+function selectMusicBrainzAlbum(recording, meta) {
+  const groups = new Map();
+  for (const release of Array.isArray(recording.releases) ? recording.releases : []) {
+    const group = release['release-group'];
+    const id = normalizeMbid(group?.id);
+    const albumArtist = creditedArtist(release['artist-credit']);
+    const types = Array.isArray(group?.['secondary-types']) ? group['secondary-types'] : [];
+    if (!id || !text(group.title) || release.status !== 'Official' ||
+        !['Album', 'EP', 'Single'].includes(group['primary-type']) || types.length ||
+        !sameIdentity(meta.artist, albumArtist) || (meta.album && !sameIdentity(meta.album, group.title))) continue;
+    const year = plausibleYear(group['first-release-date']) || plausibleYear(release.date);
+    const prior = groups.get(id);
+    if (!prior || (year && (!prior.year || year < prior.year))) groups.set(id, { album: group.title, albumArtist, year, type: group['primary-type'] });
+  }
+  const rows = [...groups.values()];
+  for (const type of ['Album', 'EP', 'Single']) {
+    const candidates = rows.filter(row => row.type === type);
+    if (candidates.length) return candidates.length === 1 ? candidates[0] : null;
+  }
+  return null;
+}
+
+async function lookupCanonicalDownloadMetadata(meta, { musicbrainz, listenbrainz }) {
+  if (!text(meta.artist) || !text(meta.title)) return meta;
+  let id = normalizeMbid(meta.trackMbid);
+  const quoted = value => '"' + text(value, 300).replace(/["\\]/g, '\\$&') + '"';
+  if (!id) {
+    const query = 'recording:' + quoted(meta.title) + ' AND artist:' + quoted(meta.artist);
+    const search = await musicbrainz('recording?' + new URLSearchParams({ query, fmt: 'json', limit: '25' })).catch(() => null);
+    const matches = new Set((Array.isArray(search?.recordings) ? search.recordings : [])
+      .filter(row => recordingMatches(meta, row)).map(row => normalizeMbid(row.id)).filter(Boolean));
+    if (matches.size !== 1) return meta;
+    [id] = matches;
+  }
+  const recording = await musicbrainz('recording/' + id + '?' + new URLSearchParams({
+    inc: 'artist-credits+releases+release-groups', fmt: 'json',
+  })).catch(() => null);
+  if (recording) {
+    if (normalizeMbid(recording.id) !== id || !recordingMatches(meta, recording)) return meta;
+    const release = selectMusicBrainzAlbum(recording, meta);
+    return { ...meta, trackMbid: meta.trackMbid || id,
+      album: meta.album || release?.album || '', albumArtist: meta.albumArtist || release?.albumArtist || '',
+      albumDate: meta.albumDate || release?.year || '' };
+  }
+  // A preexisting recording MBID anchors the fallback if the primary service fails.
+  if (normalizeMbid(meta.trackMbid) !== id) return meta;
+  const data = await listenbrainz('metadata/recording/?' + new URLSearchParams({ recording_mbids: id, inc: 'artist release' })).catch(() => null);
+  const row = data?.[id];
+  const release = row?.release;
+  const album = text(release?.name);
+  if (!sameIdentity(meta.artist, row?.artist?.name) || !sameIdentity(meta.title, row?.recording?.name) ||
+      !sameIdentity(meta.artist, release?.album_artist_name) || !album ||
+      (meta.album && !sameIdentity(meta.album, album)) ||
+      /\b(compilation|greatest hits|best of|soundtrack)\b/i.test(album) ||
+      (hasVersionMarker(album) && !hasVersionMarker(meta.title))) return meta;
+  return { ...meta, album: meta.album || album, albumArtist: meta.albumArtist || release.album_artist_name,
+    albumDate: meta.albumDate || plausibleYear(release.year) };
+}
+
+module.exports = { lookupCanonicalDownloadMetadata, text, stripYoutubeTopicSuffix, normalizeIdentityText, sameIdentity, getLastfmTrackInfoParams, enrichCanonicalDownloadMetadata };

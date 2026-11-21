@@ -4,9 +4,9 @@ function metadataPathIsLocked(filePath) {
 }
 
 function isRemotePlaybackTrack(track) { return !!(track && track.playback && track.playback.kind === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(track.playback.videoId || '')); }
-function cancelLocalGaplessFrame() {
-  if (localGaplessFrame !== null) cancelAnimationFrame(localGaplessFrame);
-  localGaplessFrame = null;
+function cancelLocalGaplessTimer() {
+  if (localGaplessTimer !== null) clearTimeout(localGaplessTimer);
+  localGaplessTimer = null;
 }
 function clearPreparedLocalSlot() {
   if (!preparedLocalSlot) return;
@@ -49,18 +49,18 @@ function prepareNextLocalTrack() {
   slot.onReady();
 }
 function checkLocalGaplessBoundary(audio) {
-  localGaplessFrame = null;
+  localGaplessTimer = null;
   if (!audio || audio !== audioEls[activeAudioIdx] || audio.paused || !state.isPlaying || playbackTransitionPending || playbackSeekActive || state.loopMode === 2 || Number(appSettings.crossfade || 0) > 0) return;
   var remaining = audio.duration - audio.currentTime;
   if (!Number.isFinite(remaining) || remaining <= 0) return;
   prepareNextLocalTrack();
   var selection = getNextTrackSelection();
-  if (remaining <= 0.025 && selection && isPreparedLocalTrack(selection.track, 1 - activeAudioIdx)) {
+  if (remaining <= 0.032 && selection && isPreparedLocalTrack(selection.track, 1 - activeAudioIdx)) {
     state.crossfadingNext = true;
     playNextTrack({ automaticAdvance: true, gaplessAdvance: true });
     return;
   }
-  if (remaining <= 0.75) localGaplessFrame = requestAnimationFrame(function () { checkLocalGaplessBoundary(audio); });
+  if (remaining <= 0.75) localGaplessTimer = setTimeout(() => checkLocalGaplessBoundary(audio), Math.max(8, (remaining - 0.032) * 1000));
 }
 function releaseRadioLeaseFromAudio(audioEl) {
   if (!audioEl) return;
@@ -177,7 +177,7 @@ async function playTrack(track, options) {
 
   if (!audioEls) audioEls = [$('audio-player-0'), $('audio-player-1')];
   invalidateRestoredPlaybackPreparation();
-  cancelLocalGaplessFrame();
+  cancelLocalGaplessTimer();
   cancelCrossfadeTransition(true);
   var previousIndex = activeAudioIdx;
   var nextIndex = 1 - previousIndex;
@@ -343,25 +343,32 @@ async function playTrack(track, options) {
 }
 
 function triggerLastfmScrobbleCycle(track) {
-  if (!appSettings.lastfmConnected || !track) return;
+  if (!track || (!appSettings.listenbrainzConnected && !(appSettings.lastfmProEnabled && appSettings.lastfmScrobbleEnabled && appSettings.lastfmConnected))) return;
   var now = Date.now();
   var progress = state.scrobbleProgress;
   if (!progress || progress.track !== track) {
-    progress = state.scrobbleProgress = { track: track, startedAtSeconds: Math.floor(now / 1000), listenedMs: 0, resumedAtMs: now, scrobbled: false };
-    window.api.lastfmUpdateNowPlaying(track.artist, track.title);
+    progress = state.scrobbleProgress = { track: track, startedAtSeconds: Math.floor(now / 1000), listenedMs: 0, resumedAtMs: now, scrobbled: false, listenbrainzUsername: appSettings.listenbrainzConnected ? appSettings.listenbrainzUsername : null };
+    if (appSettings.listenbrainzConnected) window.api.listenbrainzNowPlaying({ artist: track.artist, title: track.title, album: track.album });
+    if (appSettings.lastfmProEnabled && appSettings.lastfmScrobbleEnabled) window.api.lastfmUpdateNowPlaying(track.artist, track.title);
   } else if (!progress.resumedAtMs) {
     progress.resumedAtMs = now;
   }
   clearTimeout(state.scrobbleTimer);
   if (progress.scrobbled) return;
-  var threshold = Math.max(10000, Math.min((track.duration || 120) * 500, 240000));
+  var threshold = Math.min((track.duration > 0 ? track.duration * 500 : 240000), 240000);
   var remaining = Math.max(0, threshold - progress.listenedMs);
   state.scrobbleTimer = setTimeout(function () {
     if (state.currentPlayingTrack !== track || !state.isPlaying) return;
     pauseLastfmScrobbleCycle(false);
     if (progress.scrobbled || progress.listenedMs < threshold) { triggerLastfmScrobbleCycle(track); return; }
     progress.scrobbled = true;
-    window.api.lastfmScrobble(track.artist, track.title, progress.startedAtSeconds);
+    if (appSettings.listenbrainzConnected && progress.listenbrainzUsername === appSettings.listenbrainzUsername) {
+      window.api.listenbrainzScrobble({ artist: track.artist, title: track.title, album: track.album,
+        startedAtSeconds: progress.startedAtSeconds, username: progress.listenbrainzUsername })
+        .then(function (queued) { if (!queued) showToast('Could not queue the ListenBrainz scrobble.'); })
+        .catch(function () { showToast('Could not queue the ListenBrainz scrobble.'); });
+    }
+    if (appSettings.lastfmProEnabled && appSettings.lastfmScrobbleEnabled) window.api.lastfmScrobble(track.artist, track.title, progress.startedAtSeconds);
   }, Math.max(1, remaining));
 }
 
@@ -421,9 +428,11 @@ async function togglePlay() {
   syncPlaybackStateUi();
 }
 // shuffleMode: 0=off, 1=random shuffle, 2=smart shuffle (no same-artist back-to-back, avoid recent)
-function buildSmartShuffleQueue() {
+function buildSmartShuffleQueue(selectedTrack) {
   var tracks = state.playQueueTracks.filter(function(t) { return !t.isDisabled; });
   if (!tracks.length) { state.shuffleQueue = []; return; }
+  var selection = selectedTrack ? findTrackIndexByIdentity(tracks, selectedTrack) : -1;
+  var first = selection === -1 ? null : tracks.splice(selection, 1)[0];
   // Group by artist
   var byArtist = Object.create(null);
   tracks.forEach(function(t) {
@@ -436,7 +445,8 @@ function buildSmartShuffleQueue() {
   // Interleave artists so same artist never appears consecutively
   var artistQueues = Object.values(byArtist).sort(function() { return Math.random() - 0.5; });
   var result = [];
-  var previousArtist = state.currentPlayingTrack ? (state.currentPlayingTrack.artist || '').toLowerCase() : '';
+  var previous = first || state.currentPlayingTrack;
+  var previousArtist = previous ? (previous.artist || '').toLowerCase() : '';
   var maxIter = tracks.length * 3;
   while (result.length < tracks.length && maxIter-- > 0) {
     for (var i = 0; i < artistQueues.length && result.length < tracks.length; i++) {
@@ -451,7 +461,7 @@ function buildSmartShuffleQueue() {
   }
   // Add any remaining (shouldn't happen but safety)
   artistQueues.forEach(function(q) { q.forEach(function(t) { if (result.indexOf(t) === -1) result.push(t); }); });
-  state.shuffleQueue = result;
+  state.shuffleQueue = first ? [first].concat(result) : result;
 }
 
 function toggleShuffle() {
@@ -724,7 +734,7 @@ async function playNextTrack(options) {
 function stopPlaybackState(options) {
   options = options || {};
   playbackGeneration++;
-  cancelLocalGaplessFrame();
+  cancelLocalGaplessTimer();
   clearPreparedLocalSlot();
   playbackTransitionPending = false;
   pendingPlaybackTrack = null;
@@ -747,7 +757,7 @@ function resetPlaybackRuntime(options) {
   options = options || {};
   if (state.radioSession) disposeRadioSession();
   playbackGeneration++;
-  cancelLocalGaplessFrame();
+  cancelLocalGaplessTimer();
   clearPreparedLocalSlot();
   playbackTransitionPending = false;
   pendingPlaybackTrack = null;
@@ -1393,6 +1403,7 @@ function findStrictAlbumMatch(row) {
   }) || null;
 }
 function findPlaylistRecordMatch(row) {
+  if (row?.SourceStatus === 'listenbrainz') return matchListenbrainzPlaylistTrack(row);
   // A remote record must retain its row identity, but resolve to a downloaded
   // local file as soon as the musical identity is available locally.
   var identityMatch = findLocalMusicalIdentity(row);

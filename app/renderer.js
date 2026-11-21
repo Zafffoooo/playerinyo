@@ -115,8 +115,7 @@ function setPlaybackFeedback(message, holdMs) {
   return token;
 }
 let homeRenderGeneration = 0;
-let recentPlaylistDockResizeObserver = null;
-let recentPlaylistDockCapacityFrame = null;
+let recentPlaylistDockObserved = false;
 const modalOpeners = new WeakMap();
 let modalStack = [];
 let activeContextMenu = null;
@@ -132,7 +131,7 @@ let playbackSeekActive = false;
 let pendingPlaybackTrack = null;
 let crossfadeSuppressedTrack = null;
 let preparedLocalSlot = null;
-let localGaplessFrame = null;
+let localGaplessTimer = null;
 let lastPlaybackSessionCheckpointAt = 0;
 let metadataWriteLockedPaths = new Set();
 let libraryScanGeneration = 0;
@@ -242,9 +241,14 @@ const lastfmRadioDiscoveryClient = window.api ? {
   start: function (request) { return window.api.lastfmDiscoveryStart(request); },
   next: function (session, options) { return window.api.lastfmDiscoveryNext(session, options); }
 } : null;
+const listenbrainzRadioDiscoveryClient = window.api ? {
+  start: function (request) { return window.api.listenbrainzDiscoveryStart(request); },
+  next: function (session, options) { return window.api.listenbrainzDiscoveryNext(session, options); }
+} : null;
 const songRadioDiscoveryClient = window.api ? { similar: function (seed) { return window.api.getSongRadioSimilar(seed); } } : null;
 const radioProviderRegistry = window.RadioProviders ? window.RadioProviders.createRadioProviderRegistry([
   window.RadioProviders.createLocalLibraryProvider(),
+  window.RadioProviders.createListenbrainzProvider(listenbrainzRadioDiscoveryClient),
   window.RadioProviders.createLastfmProvider(lastfmRadioDiscoveryClient),
   window.RadioProviders.createSongRadioProvider(songRadioDiscoveryClient)
 ]) : null;
@@ -712,6 +716,7 @@ function requestCloseModal(el) {
   if (el.id === 'playlist-text-dialog') { el.querySelector('[data-cancel]').click(); return; }
   if (el.id === 'playlist-import-modal') { var pic = $('playlist-import-cancel-x') || $('playlist-import-cancel'); if (pic) pic.click(); return; }
   if (el.id === 'playlist-cover-crop-modal') { $('playlist-cover-crop-cancel').click(); return; }
+  if (el.id === 'youtube-playlist-modal') { $('youtube-hub-close').click(); return; }
   if (el.id === 'playlist-import-source-modal') { var pis = $('playlist-import-source-cancel'); if (pis) pis.click(); return; }
   if (el.id === 'album-download-modal') { closeAlbumDownloadModal(); return; }
   if (el.id === 'add-songs-modal') { var asc = $('btn-close-add-songs'); if (asc) asc.click(); return; }
@@ -858,7 +863,8 @@ async function undoAtomicAppState(snap) {
       playlists: snap.playlists || [],
       mappings: snap.mappings || {},
       settings: snap.settings || {},
-      likedSongs: snap.likedSongs || []
+      likedSongs: snap.likedSongs || [],
+      ...snap.youtubeBackup
     });
     if (!(result === true || (result && result.ok === true))) throw new Error((result && result.error) || 'The main process rejected the app-state restore.');
     restoreCommitted = true;
@@ -1534,6 +1540,15 @@ function moveTrackToShuffleQueueStart(track) {
     state.shuffleQueue.unshift(queuedTrack);
   }
 }
+function restartShuffleForTrack(track) {
+  if (!state.isShuffle || !track || track.isDisabled) return;
+  if (state.shuffleMode === 2) {
+    buildSmartShuffleQueue(track);
+    return;
+  }
+  buildShuffleQueue();
+  moveTrackToShuffleQueueStart(track);
+}
 function applyZoom() { $('albums-grid').style.gridTemplateColumns = 'repeat(auto-fill,minmax(' + currentZoom + 'px,1fr))'; }
 function setViewKind(kind) {
   document.body.dataset.view = kind || '';
@@ -1551,8 +1566,19 @@ function hideAllViewRoots() {
   var smartMixActions = $('smart-mix-detail-actions'); if (smartMixActions) smartMixActions.hidden = true;
 }
 
+function radioProviderEnabled(id) {
+  if (id === 'listenbrainz') return appSettings.listenbrainzGenreRadioEnabled !== false;
+  if (id === 'lastfm') return appSettings.lastfmProEnabled === true;
+  return true;
+}
+
+function isGenreDiscoveryProvider(id) {
+  return id === 'lastfm' || id === 'listenbrainz';
+}
+
 function getRadioProvider(providerId) {
-  return radioProviderRegistry && radioProviderRegistry.get(providerId || radioUiState.providerId || 'local-library');
+  var id = providerId || radioUiState.providerId || 'local-library';
+  return radioProviderRegistry && radioProviderEnabled(id) ? radioProviderRegistry.get(id) : null;
 }
 
 function getRadioProviderContext() {
@@ -1576,11 +1602,13 @@ function consumeRadioDiscoveryBias(session, count) {
 }
 async function setMoreLikeThis(track) {
   var session = state.radioSession;
-  if (!session || session.providerId !== 'lastfm' || !track || !window.api || !window.api.lastfmDiscoverySimilarity) return;
+  if (!session || !isGenreDiscoveryProvider(session.providerId) || !track || !window.api) return;
   var seed = { artist: track.artist || '', title: track.title || '', trackMbid: track.trackMbid || track.recordingMbid || '' };
   if (!seed.artist || !seed.title) return;
   try {
-    var result = await window.api.lastfmDiscoverySimilarity(seed, session.genreIds[0]);
+    var result = session.providerId === 'listenbrainz'
+      ? await window.api.listenbrainzDiscoverySimilarity(seed)
+      : await window.api.lastfmDiscoverySimilarity(seed, session.genreIds[0]);
     if (!isCurrentRadioSession(session, session.stationId)) return;
     session.discoveryBias = { type: 'more-like-this', seedTrack: seed, strength: 1, remainingSelections: 10, candidateIds: Array.isArray(result && result.candidateIds) ? result.candidateIds.slice(0, 80) : [] };
     showToast(session.discoveryBias.candidateIds.length ? 'More Like This is guiding the next selections.' : 'Similarity is unavailable for this station; normal discovery continues.');
@@ -1596,7 +1624,7 @@ function scheduleQueueRefresh() {
 
 function radioGenreIdsMatch(providerId, left, right) {
   if (!left || !right) return false;
-  if (providerId === 'lastfm' && window.RadioProviders && window.RadioProviders.normalizeLastfmGenreKey) {
+  if (isGenreDiscoveryProvider(providerId) && window.RadioProviders && window.RadioProviders.normalizeLastfmGenreKey) {
     return window.RadioProviders.normalizeLastfmGenreKey(left) === window.RadioProviders.normalizeLastfmGenreKey(right);
   }
   return left === right;
@@ -1619,7 +1647,7 @@ function normalizeRadioProviderSession(value, fallbackGenreIds, providerId) {
   var genreIds = Array.isArray(source.genreIds) ? source.genreIds : fallbackGenreIds;
   var normalizedGenres = Array.from(new Set((genreIds || []).map(function (genre) { return String(genre || '').trim(); }).filter(Boolean)));
   if (!normalizedGenres.length) return null;
-  if (providerId === 'lastfm') {
+  if (isGenreDiscoveryProvider(providerId)) {
     if (source.version !== 1 || typeof source.poolKey !== 'string' || !source.poolKey) return null;
     return {
       version: 1,

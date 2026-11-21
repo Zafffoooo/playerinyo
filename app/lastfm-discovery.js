@@ -77,7 +77,7 @@ function candidateFromTrack(track, options) {
   if (!String(artist).trim() || !String(title).trim()) return null;
   const rank = Math.max(1, Number(options.rank || (track && track['@attr'] && track['@attr'].rank) || 9999) || 9999);
   const candidate = {
-    providerId: 'lastfm',
+    providerId: options.providerId || 'lastfm',
     itemKind: 'candidate',
     artist: String(artist).trim(),
     title: String(title).trim(),
@@ -93,7 +93,7 @@ function candidateFromTrack(track, options) {
       rank,
     },
   };
-  candidate.id = `lastfm:track:${getCandidateIdentity(candidate)}`;
+  candidate.id = `${candidate.providerId}:track:${getCandidateIdentity(candidate)}`;
   return getCandidateIdentity(candidate) ? candidate : null;
 }
 

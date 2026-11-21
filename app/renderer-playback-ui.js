@@ -128,7 +128,7 @@ async function applyRuntimeSettings(options) {
   document.body.classList.toggle('perf-mode', !!appSettings.virtualScrolling);
   applyThemeSettings();
   refreshDownloadFolderUi();
-  updateLastfmIcon();
+  updateConnectionsIcon();
   refreshSafeStorageStatus();
   if (audioCtx) {
     eqBands.forEach(function (band, index) { band.gain.value = appSettings.eqGains ? (appSettings.eqGains[index] || 0) : 0; });
@@ -324,7 +324,7 @@ async function initApp() {
   restorePlaybackStateFromSettings();
   restoreDownloadQueueState();
   await recoverPendingDownloads();
-  updateLastfmIcon();
+  updateConnectionsIcon();
   buildColorPickers();
   setQueueOpen(false);
   setLyricsOpen(false);
@@ -910,6 +910,11 @@ function appendSmartPlaylistCard(list, playlist, tracks, options) {
     var card = document.createElement('button');
     card.type = 'button';
     card.className = 'smart-mix-card' + (state.currentView === playlist.id ? ' active' : '') + (state.sourcePlaylistId === playlist.id ? ' playing-source' : '');
+    if (options.workspace) {
+      card.id = playlist.id;
+      card.dataset.source = 'smart';
+      card.dataset.folder = '';
+    }
     card.dataset.searchText = [playlist.name, playlist.desc, getSmartPlaylistGenreSummary(playlist)].filter(Boolean).join(' ');
     card.setAttribute('aria-label', 'Open Smart Playlist ' + playlist.name + ', ' + tracks.length + ' tracks');
 
@@ -941,15 +946,11 @@ function appendSmartPlaylistCard(list, playlist, tracks, options) {
     list.appendChild(card);
 }
 
-function renderSmartPlaylistsGrid() {
-  var list = $('smart-mixes-list');
+function renderSmartPlaylistsGrid(list) {
+  list = list || $('playlists-list');
   if (!list) return;
-  list.replaceChildren();
-  var customPlaylists = Array.isArray(appSettings.customSmartPlaylists) ? appSettings.customSmartPlaylists : [];
-  var section = $('smart-mixes-section');
-  if (section) section.hidden = customPlaylists.length === 0;
-  customPlaylists.forEach(function (playlist) {
-    appendSmartPlaylistCard(list, playlist, evaluateSmartPlaylist(playlist));
+  getSmartPlaylists().forEach(function (playlist) {
+    appendSmartPlaylistCard(list, playlist, evaluateSmartPlaylist(playlist), { workspace: true });
   });
 }
 
@@ -971,7 +972,7 @@ function renderDailySmartPlaylists() {
 }
 
 // Kept for older callers that rendered this feature outside the playlist workspace.
-function renderSmartPlaylistsSection() { renderSmartPlaylistsGrid(); }
+function renderSmartPlaylistsSection() { if (state.currentView === 'playlists') renderSidebarPlaylists(); }
 
 
 function openSmartPlaylist(sp) {
@@ -1117,8 +1118,13 @@ function openRulePlaylistBuilder(playlist) {
   function validRules() { return rules.length && rules.every(function (rule) { return String(rule.value || '').trim(); }); }
   function updatePreview() {
     var candidate = { rules: rules };
-    var count = validRules() ? evaluateSmartPlaylist(candidate).length : 0;
-    preview.textContent = count;
+    var matches = validRules() ? evaluateSmartPlaylist(candidate) : [];
+    preview.textContent = matches.length;
+    $('srp-preview-tracks').replaceChildren(...matches.slice(0, 5).map(function (track) {
+      var item = document.createElement('li');
+      item.textContent = track.title || 'Unknown track';
+      return item;
+    }));
     save.disabled = !validRules();
     error.hidden = validRules();
     if (!validRules()) error.textContent = 'Complete every rule before saving this playlist.';
@@ -1550,7 +1556,7 @@ function initPlaybackControls() {
   audioEls.forEach(function (audioEl) {
     audioEl.addEventListener('ended', async function () {
       if (audioEl !== audioEls[activeAudioIdx]) return;
-      cancelLocalGaplessFrame();
+      cancelLocalGaplessTimer();
       if (playbackTransitionPending) return;
       if (state.loopMode === 2) {
         // Repeat-one restarts the same track object without going through
@@ -1591,7 +1597,7 @@ function initPlaybackControls() {
     });
     audioEl.addEventListener('pause', function () {
       if (audioEl !== audioEls[activeAudioIdx] || playbackTransitionPending || audioEl.ended || !state.isPlaying) return;
-      cancelLocalGaplessFrame();
+      cancelLocalGaplessTimer();
       cancelCrossfadeTransition(false);
       audioEls.forEach(function (otherAudio) { if (otherAudio !== audioEl && !otherAudio.paused) otherAudio.pause(); });
       state.isPlaying = false;
@@ -1639,7 +1645,7 @@ function initPlaybackControls() {
 
         var cfDuration = appSettings.crossfade ? parseInt(appSettings.crossfade, 10) : 0;
         var remaining = audioEl.duration - audioEl.currentTime;
-        if (remaining <= 1 && localGaplessFrame === null && cfDuration === 0) checkLocalGaplessBoundary(audioEl);
+        if (remaining <= 1 && localGaplessTimer === null && cfDuration === 0) checkLocalGaplessBoundary(audioEl);
         // Skip early-advance on repeat-one; the ended handler restarts the track instead
         if (cfDuration > 0 && remaining <= cfDuration && state.isPlaying && !audioEl.paused && crossfadeSuppressedTrack !== state.currentPlayingTrack && !state.crossfadingNext && !playbackTransitionPending && !crossfadeActive && !playbackSeekActive && state.loopMode !== 2) {
           var nextSelection = getNextTrackSelection();
@@ -1793,6 +1799,10 @@ function bootstrap() {
   initImportReviewControls();
   initLyricsControls();
   initAudioOutputControls();
+  initListenbrainzReleases();
+  initYouTubePlaylists();
+  initListenbrainzPlaylists();
+  initListenbrainzSettings();
   initSettingsControls();
   initMetadataControls();
   initPlaybackControls();
